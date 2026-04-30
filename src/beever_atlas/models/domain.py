@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -50,12 +51,25 @@ class AtomicFact(BaseModel):
     )
 
     @staticmethod
-    def deterministic_id(
-        platform: str, channel_id: str, message_ts: str, fact_index: int = 0
-    ) -> str:
-        """Generate a deterministic UUID for idempotent upserts."""
+    def deterministic_id(memory_text: str, entity_names: list[str]) -> str:
+        """Generate a content-derived deterministic UUID for idempotent upserts.
+
+        PR-B (`extraction-worker` spec, design D4): switched from a
+        position-based key (``platform:channel_id:message_ts:fact_index``)
+        to a content-derived hash. The position-based key shifted whenever
+        the LLM produced facts in a different order or count on retry,
+        causing phantom Weaviate duplicates. The content hash is stable
+        across reorderings and partial failures.
+
+        The same fact text + same entity set yields the same UUID; subtly
+        different text or a different entity set yields a different UUID.
+        Empty ``entity_names`` is permitted (some fact_types like
+        ``"observation"`` may extract zero entities).
+        """
         namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
-        return str(uuid.uuid5(namespace, f"{platform}:{channel_id}:{message_ts}:{fact_index}"))
+        normalized_entities = "|".join(sorted(str(n) for n in entity_names))
+        digest = hashlib.sha256(f"{memory_text}|{normalized_entities}".encode()).hexdigest()[:16]
+        return str(uuid.uuid5(namespace, digest))
 
 
 class GraphEntity(BaseModel):

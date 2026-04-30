@@ -1292,11 +1292,16 @@ class BatchProcessor:
                         weaviate_ids = persist_result.get("weaviate_ids") or []
                         for idx, fd in enumerate(embedded_facts_raw):
                             fact_channel = fd.get("channel_id") or channel_id
-                            msg_ts = fd.get("message_ts", "")
+                            # PR-B: content-derived deterministic ID for the
+                            # contradiction-detector fallback path. Mirrors the
+                            # persister so re-runs map to the same fact_id.
+                            entity_names = fd.get("entity_tags") or []
                             fact_id = (
                                 weaviate_ids[idx]
                                 if idx < len(weaviate_ids)
-                                else AtomicFact.deterministic_id("slack", fact_channel, msg_ts, idx)
+                                else AtomicFact.deterministic_id(
+                                    fd.get("memory_text", ""), entity_names
+                                )
                             )
                             persisted_facts.append(
                                 AtomicFact(

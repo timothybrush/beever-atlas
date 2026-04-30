@@ -175,11 +175,14 @@ class PersisterAgent(BaseAgent):
         # --- 3. Convert dicts to Pydantic models ---
         facts: list[AtomicFact] = []
         for idx, fd in enumerate(embedded_facts):
-            platform = fd.get("platform", "slack")
             # Use session channel_id — the LLM output doesn't include it.
             fact_channel_id = fd.get("channel_id") or channel_id
-            message_ts = fd.get("message_ts", "")
-            fact_id = AtomicFact.deterministic_id(platform, fact_channel_id, message_ts, idx)
+            # PR-B (design D4): content-derived deterministic ID. The previous
+            # ``(platform, channel_id, message_ts, idx)`` key shifted whenever
+            # the LLM produced facts in a different order on retry, creating
+            # phantom Weaviate duplicates. ``idx`` is intentionally unused now.
+            entity_names = fd.get("entity_tags") or []
+            fact_id = AtomicFact.deterministic_id(fd.get("memory_text", ""), entity_names)
             fact_data = {k: v for k, v in fd.items() if k != "id"}
             fact_data["channel_id"] = fact_channel_id
 
