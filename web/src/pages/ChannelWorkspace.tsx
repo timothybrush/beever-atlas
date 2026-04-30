@@ -109,8 +109,20 @@ export function ChannelWorkspace() {
 
   const isMember = channel?.is_member === true;
   const { syncState, triggerSync, isSyncing, error: syncError } = useSync(id ?? "", channel?.connection_id ?? null);
-  const syncFailureMessage =
-    syncError || (syncState.state === "error" ? syncState.errors?.filter(Boolean).join("; ") : null);
+  // PR-B: when the failure banner copy is built from sync state errors,
+  // prefer the deduped form (single line per unique message + count)
+  // so a Gemini 503 storm shows "AI provider temporarily unavailable
+  // (×12 batches)" instead of twelve repeated lines.
+  const syncFailureMessage = (() => {
+    if (syncError) return syncError;
+    if (syncState.state !== "error") return null;
+    if (syncState.dedupedErrors && syncState.dedupedErrors.length > 0) {
+      return syncState.dedupedErrors
+        .map((e) => (e.count > 1 ? `${e.message} (×${e.count} batches)` : e.message))
+        .join("; ");
+    }
+    return syncState.errors?.filter(Boolean).join("; ") ?? null;
+  })();
 
   // Parse "Try again in Ns." out of cooldown errors so we can show a live
   // countdown instead of a stale number. Matched once when the message arrives;

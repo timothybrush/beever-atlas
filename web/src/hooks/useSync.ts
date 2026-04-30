@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api, ApiError } from "@/lib/api";
+import { dedupeErrors, formatDedupedErrors } from "@/lib/dedupeErrors";
 import type { BatchResultEntry, SyncResponse, SyncStatusResponse } from "@/lib/types";
 
 export interface SyncState {
@@ -22,6 +23,9 @@ export interface SyncState {
   batch_job_state?: string | null;
   batch_job_elapsed_seconds?: number | null;
   errors?: string[];
+  /** Deduped errors with per-message counts. PR-B: replaces wall-of-errors
+   * with a single row per unique message. */
+  dedupedErrors?: import("@/lib/dedupeErrors").DedupedError[];
 }
 
 export interface UseSyncReturn {
@@ -49,9 +53,16 @@ export function useSync(channelId: string, connectionId?: string | null): UseSyn
       const status = await api.get<SyncStatusResponse>(
         `/api/channels/${channelId}/sync/status`,
       );
+      // PR-B: dedupe identical errors before display so a 12-batch
+      // 503 storm renders as one "(×12 batches)" row instead of a
+      // wall of identical lines. The full deduped list is exposed on
+      // SyncState.errors so callers can render structured rows; the
+      // single-line ``error`` retains the legacy semicolon shape for
+      // toast / inline-banner consumers that haven't migrated yet.
+      const dedupedErrors = dedupeErrors(status.errors);
       const backendError =
         status.state === "error"
-          ? status.errors?.filter(Boolean).join("; ") || "Sync failed"
+          ? formatDedupedErrors(dedupedErrors) || "Sync failed"
           : null;
       setSyncState({
         state: status.state,
@@ -69,6 +80,7 @@ export function useSync(channelId: string, connectionId?: string | null): UseSyn
         batch_job_state: status.batch_job_state,
         batch_job_elapsed_seconds: status.batch_job_elapsed_seconds,
         errors: status.errors,
+        dedupedErrors,
       });
       setError(backendError);
       setIsSyncing(status.state === "syncing");

@@ -172,7 +172,12 @@ export function SyncProgress({ syncState, isSyncing }: SyncProgressProps) {
   const timings = syncState.stage_timings ?? {};
   const isRetrying = !isFailed && (stage?.includes("retrying") ?? false);
   const parsed = parseStage(stage);
+  // PR-B: prefer the deduped error list when present so a 12-batch
+  // 503 storm renders as one row instead of twelve identical lines.
+  // Fall back to the raw filtered list for transitional deployments
+  // where the worker has not yet been wired through useSync.
   const errors = syncState.errors?.filter(Boolean) ?? [];
+  const dedupedErrors = syncState.dedupedErrors ?? [];
   const batchJobState = syncState.batch_job_state;
   const batchJobElapsed = syncState.batch_job_elapsed_seconds;
 
@@ -228,14 +233,25 @@ export function SyncProgress({ syncState, isSyncing }: SyncProgressProps) {
           </span>
         </div>
 
-        {/* Error details */}
-        {isFailed && errors.length > 0 && (
+        {/* Error details — deduped so identical 503s collapse into one row */}
+        {isFailed && (dedupedErrors.length > 0 || errors.length > 0) && (
           <div className="rounded-md border border-red-200 dark:border-red-900/50 bg-red-50 dark:bg-red-950/20 px-3 py-2 mb-2.5">
-            {errors.map((err, i) => (
-              <div key={i} className="text-[11px] text-red-700 dark:text-red-300 truncate">
-                {err}
-              </div>
-            ))}
+            {dedupedErrors.length > 0
+              ? dedupedErrors.map((entry, i) => (
+                  <div
+                    key={`${entry.message}-${i}`}
+                    className="text-[11px] text-red-700 dark:text-red-300 truncate"
+                  >
+                    {entry.count > 1
+                      ? `${entry.message} (×${entry.count} batches)`
+                      : entry.message}
+                  </div>
+                ))
+              : errors.map((err, i) => (
+                  <div key={i} className="text-[11px] text-red-700 dark:text-red-300 truncate">
+                    {err}
+                  </div>
+                ))}
           </div>
         )}
 
