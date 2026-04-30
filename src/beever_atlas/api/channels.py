@@ -256,15 +256,62 @@ async def _fetch_file_messages(
     since: str | None = None,
     order: str = "desc",
 ) -> "MessagesListResponse":
-    """Read persisted messages for a file-imported channel."""
+    """Read persisted messages for a file-imported channel.
+
+    PR-A.6.2 — When ``READ_FILE_IMPORTS_FROM_CHANNEL_MESSAGES`` is ON AND
+    ``channel_messages`` carries rows for this channel with
+    ``source_id="file"``, the request is served from the unified Message
+    Store. Otherwise falls back to the legacy ``imported_messages``
+    collection. Mirrors the dual-read pattern from PR-A.5.
+    """
     stores = get_stores()
-    query: dict[str, Any] = {"channel_id": channel_id}
+    settings = get_settings()
+
+    since_dt: datetime | None = None
     if since:
         try:
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            query["timestamp"] = {"$gte": since_dt}
         except ValueError:
-            pass
+            since_dt = None
+
+    if settings.read_file_imports_from_channel_messages:
+        store_rows = await stores.mongodb.get_channel_messages(
+            channel_id,
+            limit=limit,
+            since=since_dt,
+            order=order,
+            source_id="file",
+        )
+        if store_rows:
+            logger.info(
+                "file_imports_read",
+                extra={
+                    "event": "file_imports_read",
+                    "channel_id": channel_id,
+                    "row_count": len(store_rows),
+                    "source": "channel_messages",
+                },
+            )
+            response_messages = [
+                _channel_message_row_to_response(row, channel_id) for row in store_rows
+            ]
+            total_count = await _compute_total_count(channel_id, adapter=None)
+            return MessagesListResponse(
+                messages=response_messages,
+                total_count=total_count,
+            )
+        logger.info(
+            "file_imports_fallback",
+            extra={
+                "event": "file_imports_fallback",
+                "reason": "empty_store",
+                "channel_id": channel_id,
+            },
+        )
+
+    query: dict[str, Any] = {"channel_id": channel_id}
+    if since_dt is not None:
+        query["timestamp"] = {"$gte": since_dt}
     sort_dir = -1 if order == "desc" else 1
     cursor = (
         stores.mongodb.db["imported_messages"].find(query).sort("timestamp", sort_dir).limit(limit)
@@ -295,6 +342,15 @@ async def _fetch_file_messages(
             )
         )
     total = await stores.mongodb.db["imported_messages"].count_documents({"channel_id": channel_id})
+    logger.info(
+        "file_imports_read",
+        extra={
+            "event": "file_imports_read",
+            "channel_id": channel_id,
+            "row_count": len(messages),
+            "source": "imported_messages",
+        },
+    )
     return MessagesListResponse(messages=messages, total_count=total)
 
 

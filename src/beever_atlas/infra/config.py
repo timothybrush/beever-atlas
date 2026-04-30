@@ -428,6 +428,29 @@ class Settings(BaseSettings):
         default=False, alias="READ_FROM_MESSAGE_STORE"
     )
 
+    # OSS pipeline + wiki redesign — PR-A.6.2 file-imports cutover.
+    # Read-side flag for the file-imports branch in ``api/channels.py``.
+    # When True AND ``channel_messages`` carries rows for the requested
+    # file channel (``source_id="file"``), the messages tab serves data
+    # from the durable Message Store. Otherwise falls back to the legacy
+    # ``imported_messages`` collection. Default OFF — staging soak after
+    # the migration script runs before flipping in production.
+    read_file_imports_from_channel_messages: bool = Field(
+        default=False, alias="READ_FILE_IMPORTS_FROM_CHANNEL_MESSAGES"
+    )
+
+    # OSS pipeline + wiki redesign — PR-A.6.2 dual-write window.
+    # When True, ``api/imports.commit_import`` writes new file-import rows
+    # to BOTH ``channel_messages`` (the new home) and ``imported_messages``
+    # (legacy, kept for instant rollback). Default ON for the soak window;
+    # flip OFF after the read flag has been ON in production for one week
+    # with zero ``channel_messages_fallback`` (reason="empty_store") log
+    # lines. ``channel_messages`` writes are unconditional regardless of
+    # this flag — only the legacy collection write is gated.
+    write_dual_file_imports: bool = Field(
+        default=True, alias="WRITE_DUAL_FILE_IMPORTS"
+    )
+
     # Single-tenant compatibility mode for the v1.0 OSS launch. When True,
     # any authenticated user principal is granted access to channels whose
     # owning PlatformConnection has ``owner_principal_id`` set to the shared
