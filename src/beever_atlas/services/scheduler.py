@@ -63,6 +63,13 @@ class SyncScheduler:
             await self._register_sync_job(policy.channel_id, policy)
             await self._register_consolidation_job(policy.channel_id, policy)
 
+        # PR-B: register the background ExtractionWorker. Two periodic jobs:
+        # ``tick`` drains the pending queue, ``sweep_stale`` recovers rows
+        # stuck in "extracting" past the stale window. The worker singleton
+        # is registered so PR-F's WikiMaintainer (and admin endpoints) can
+        # subscribe to ``on_extraction_done`` without a constructor weave.
+        await self._register_extraction_worker_jobs()
+
         await self._scheduler.__aenter__()
         self._started = True
         logger.info(
@@ -208,6 +215,82 @@ class SyncScheduler:
                 await self._scheduler.remove_schedule(job_id)
             except Exception:
                 pass  # Job may not exist
+
+    async def _register_extraction_worker_jobs(self) -> None:
+        """Register the global ExtractionWorker tick + sweep jobs.
+
+        The worker is process-wide (one instance, not per-channel) — its
+        atomic ``find_one_and_update`` claim is the safety primitive that
+        lets multiple worker replicas (future) drain the same queue
+        without double-processing. ``tick`` runs every
+        ``extraction_worker_tick_seconds`` (default 30s), ``sweep_stale``
+        every 5min. Both jobs short-circuit when there's no work, so the
+        Mongo cost when the queue is idle is one cheap index probe per
+        tick.
+        """
+        from beever_atlas.infra.config import get_settings
+        from beever_atlas.services.extraction_worker import (
+            ExtractionWorker,
+            init_extraction_worker,
+        )
+
+        settings = get_settings()
+        worker = ExtractionWorker(
+            stale_seconds=settings.extraction_worker_stale_seconds,
+        )
+        init_extraction_worker(worker)
+
+        await self._scheduler.add_schedule(
+            self._extraction_tick,
+            IntervalTrigger(seconds=settings.extraction_worker_tick_seconds),
+            id="extraction:tick",
+            max_running_jobs=1,
+            conflict_policy="do_nothing",
+        )
+        await self._scheduler.add_schedule(
+            self._extraction_sweep,
+            IntervalTrigger(seconds=300),
+            id="extraction:sweep",
+            max_running_jobs=1,
+            conflict_policy="do_nothing",
+        )
+        logger.info(
+            "SyncScheduler: ExtractionWorker registered tick=%ds stale=%ds",
+            settings.extraction_worker_tick_seconds,
+            settings.extraction_worker_stale_seconds,
+        )
+
+    async def _extraction_tick(self) -> None:
+        """Scheduler entry point — fans through to the worker singleton."""
+        from beever_atlas.services.extraction_worker import get_extraction_worker
+
+        worker = get_extraction_worker()
+        if worker is None:
+            return
+        try:
+            await worker.tick()
+        except Exception as exc:
+            logger.error(
+                "SyncScheduler: extraction tick failed: %s",
+                exc,
+                exc_info=True,
+            )
+
+    async def _extraction_sweep(self) -> None:
+        """Periodic stale-extracting recovery sweep."""
+        from beever_atlas.services.extraction_worker import get_extraction_worker
+
+        worker = get_extraction_worker()
+        if worker is None:
+            return
+        try:
+            await worker.sweep_stale()
+        except Exception as exc:
+            logger.error(
+                "SyncScheduler: extraction sweep failed: %s",
+                exc,
+                exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Job execution

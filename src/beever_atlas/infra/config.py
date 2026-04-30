@@ -447,6 +447,35 @@ class Settings(BaseSettings):
     # this flag — only the legacy collection write is gated.
     write_dual_file_imports: bool = Field(default=True, alias="WRITE_DUAL_FILE_IMPORTS")
 
+    # OSS pipeline + wiki redesign — PR-B background extraction worker.
+    # When True, ``services/sync_runner.py`` skips the inline
+    # ``BatchProcessor.process_messages()`` call after upserting messages
+    # to ``channel_messages``. The background ``ExtractionWorker``
+    # registered by the scheduler then claims the rows in the next tick
+    # (default 30s) and runs the 6-stage ADK pipeline asynchronously.
+    # This is the primary lever that makes a Gemini 503 storm survivable
+    # — sync (fetch + persist) finishes in seconds; extraction proceeds
+    # in the background and retries with exponential backoff. Default
+    # OFF — staging soak (48h) before flipping in production. Rollback
+    # is reversible: flipping OFF returns to inline extraction; the
+    # worker idles harmlessly with no rows to claim.
+    decouple_extraction: bool = Field(default=False, alias="DECOUPLE_EXTRACTION")
+
+    # Background extraction worker tick interval (seconds). 30s is the
+    # spec default; lower values increase responsiveness at the cost of
+    # more empty-claim Mongo round-trips when the queue is idle.
+    extraction_worker_tick_seconds: int = Field(
+        default=30, ge=5, le=600, alias="EXTRACTION_WORKER_TICK_SECONDS"
+    )
+
+    # Stale-extracting recovery sweep interval (seconds). Resets rows
+    # stuck in "extracting" longer than this window back to "pending".
+    # Conservative default (10 min) — extraction batches typically
+    # complete in 30-90 seconds.
+    extraction_worker_stale_seconds: int = Field(
+        default=600, ge=60, le=3600, alias="EXTRACTION_WORKER_STALE_SECONDS"
+    )
+
     # Single-tenant compatibility mode for the v1.0 OSS launch. When True,
     # any authenticated user principal is granted access to channels whose
     # owning PlatformConnection has ``owner_principal_id`` set to the shared

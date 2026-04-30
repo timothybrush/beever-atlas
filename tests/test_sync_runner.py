@@ -784,3 +784,173 @@ def test_has_active_sync_returns_false_for_done_task() -> None:
         assert runner.has_active_sync("C123") is False
 
     asyncio.run(_run())
+
+
+# ---------------------------------------------------------------------------
+# PR-B.3 — DECOUPLE_EXTRACTION flag wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_sync_skips_inline_extraction_when_decouple_flag_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When ``DECOUPLE_EXTRACTION=true``, ``_run_sync`` MUST skip
+    ``BatchProcessor.process_messages`` entirely.
+
+    Messages still land in ``channel_messages`` via the PR-A.3 upsert
+    (with ``extraction_status="pending"``); the background ExtractionWorker
+    is responsible for actually running the LLM pipeline. This is the
+    primary lever that makes a Gemini 503 storm survivable — sync
+    completes in seconds even when the LLM is unreachable.
+    """
+
+    class _Mongo:
+        async def upsert_channel_messages(self, rows) -> dict[str, int]:
+            return {
+                "inserted": len(rows),
+                "modified": 0,
+                "matched": 0,
+                "upserted_ids": len(rows),
+            }
+
+        async def complete_sync_job(self, **kwargs) -> None:
+            pass
+
+        async def log_activity(self, **kwargs) -> None:
+            pass
+
+        async def update_channel_sync_state(self, **kwargs) -> None:
+            pass
+
+    stores = SimpleNamespace(mongodb=_Mongo())
+    monkeypatch.setattr(sync_runner_module, "get_stores", lambda: stores)
+
+    async def _fake_resolve_policy(channel_id):
+        from types import SimpleNamespace as NS
+
+        return NS(ingestion=NS(), sync=NS(max_messages=100))
+
+    monkeypatch.setattr(
+        "beever_atlas.services.sync_runner.resolve_effective_policy",
+        _fake_resolve_policy,
+        raising=False,
+    )
+
+    # Flip the flag ON for this test only — get_settings() inside _run_sync.
+    monkeypatch.setattr(
+        sync_runner_module,
+        "get_settings",
+        lambda: SimpleNamespace(decouple_extraction=True),
+    )
+
+    process_called: dict[str, bool] = {"ran": False}
+
+    async def _process_messages(**kwargs) -> BatchResult:
+        process_called["ran"] = True
+        return BatchResult(total_facts=0, total_entities=0, errors=[])
+
+    runner = sync_runner_module.SyncRunner()
+    runner._batch_processor = SimpleNamespace(process_messages=_process_messages)
+
+    msg = SimpleNamespace(
+        platform="slack",
+        channel_id="C_DECOUPLE",
+        message_id="m1",
+        timestamp=datetime(2026, 4, 30, 11, 0, tzinfo=UTC),
+        author="dave",
+        thread_id=None,
+        content="hi",
+    )
+    await runner._run_sync(
+        job_id="job-decouple",
+        channel_id="C_DECOUPLE",
+        channel_name="general",
+        messages=[msg],
+        parent_count=1,
+    )
+
+    # The flag's whole point: BatchProcessor was NOT invoked inline.
+    assert process_called["ran"] is False, (
+        "DECOUPLE_EXTRACTION=true must skip BatchProcessor.process_messages — "
+        "the worker is responsible for extraction."
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_sync_runs_inline_extraction_when_decouple_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default behaviour (flag OFF) MUST still invoke inline extraction.
+
+    Guards against accidental default-flip during code edits — the rollout
+    is staging-soak first, production second; both default OFF.
+    """
+
+    class _Mongo:
+        async def upsert_channel_messages(self, rows) -> dict[str, int]:
+            return {
+                "inserted": len(rows),
+                "modified": 0,
+                "matched": 0,
+                "upserted_ids": len(rows),
+            }
+
+        async def complete_sync_job(self, **kwargs) -> None:
+            pass
+
+        async def log_activity(self, **kwargs) -> None:
+            pass
+
+        async def update_channel_sync_state(self, **kwargs) -> None:
+            pass
+
+    stores = SimpleNamespace(mongodb=_Mongo())
+    monkeypatch.setattr(sync_runner_module, "get_stores", lambda: stores)
+
+    async def _fake_resolve_policy(channel_id):
+        from types import SimpleNamespace as NS
+
+        return NS(ingestion=NS(), sync=NS(max_messages=100))
+
+    monkeypatch.setattr(
+        "beever_atlas.services.sync_runner.resolve_effective_policy",
+        _fake_resolve_policy,
+        raising=False,
+    )
+
+    monkeypatch.setattr(
+        sync_runner_module,
+        "get_settings",
+        lambda: SimpleNamespace(decouple_extraction=False),
+    )
+
+    process_called: dict[str, bool] = {"ran": False}
+
+    async def _process_messages(**kwargs) -> BatchResult:
+        process_called["ran"] = True
+        return BatchResult(total_facts=0, total_entities=0, errors=[])
+
+    runner = sync_runner_module.SyncRunner()
+    runner._batch_processor = SimpleNamespace(process_messages=_process_messages)
+
+    msg = SimpleNamespace(
+        platform="slack",
+        channel_id="C_INLINE",
+        message_id="m1",
+        timestamp=datetime(2026, 4, 30, 11, 0, tzinfo=UTC),
+        author="eve",
+        thread_id=None,
+        content="hi",
+    )
+    await runner._run_sync(
+        job_id="job-inline",
+        channel_id="C_INLINE",
+        channel_name="general",
+        messages=[msg],
+        parent_count=1,
+    )
+
+    assert process_called["ran"] is True, (
+        "DECOUPLE_EXTRACTION=false must keep inline BatchProcessor invocation."
+    )

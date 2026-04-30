@@ -718,14 +718,37 @@ class SyncRunner:
                         exc,
                     )
 
-            result = await self._batch_processor.process_messages(
-                messages=messages,
-                channel_id=channel_id,
-                channel_name=channel_name,
-                sync_job_id=job_id,
-                ingestion_config=effective_policy.ingestion,
-                use_batch_api=use_batch_api,
-            )
+            # PR-B: with DECOUPLE_EXTRACTION ON, sync skips inline extraction
+            # entirely — messages already landed in ``channel_messages`` (PR-A)
+            # with ``extraction_status="pending"`` via ``$setOnInsert``, so the
+            # background ``ExtractionWorker`` will pick them up in the next
+            # tick (default 30s). Sync returns in seconds; a Gemini 503 can no
+            # longer kill the job. Rolls back trivially: flag OFF returns to
+            # inline extraction.
+            decouple_extraction = get_settings().decouple_extraction
+            if decouple_extraction:
+                logger.info(
+                    "SyncRunner: DECOUPLE_EXTRACTION=true — skipping inline "
+                    "extraction job_id=%s channel=%s message_count=%d "
+                    "(worker will claim from channel_messages)",
+                    job_id,
+                    channel_id,
+                    len(messages),
+                )
+                # Synthesize an empty BatchResult so downstream cursor + status
+                # logic is unchanged. The worker will populate per-row state.
+                from beever_atlas.services.batch_processor import BatchResult
+
+                result = BatchResult()
+            else:
+                result = await self._batch_processor.process_messages(
+                    messages=messages,
+                    channel_id=channel_id,
+                    channel_name=channel_name,
+                    sync_job_id=job_id,
+                    ingestion_config=effective_policy.ingestion,
+                    use_batch_api=use_batch_api,
+                )
 
             # Determine last_sync_ts from the latest TOP-LEVEL message only.
             # Thread replies may have older timestamps that would cause cursor drift.

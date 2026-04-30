@@ -689,6 +689,43 @@ async def get_thread_messages(
     ]
 
 
+@router.get("/api/channels/{channel_id}/extraction-status")
+async def get_channel_extraction_status(
+    channel_id: str,
+    principal: Principal = Depends(require_user),
+) -> dict[str, Any]:
+    """Return per-status extraction counts for a channel.
+
+    PR-B (extraction-worker spec). Backs the frontend's "Enriching: X
+    of Y messages complete" progress row that replaces the wall-of-503
+    banner when ``DECOUPLE_EXTRACTION`` is ON. Counts are aggregated
+    via a single MongoDB pipeline that hits the partial-filter index
+    on ``(extraction_status, next_attempt_at)``.
+
+    Response shape::
+
+        {
+            "channel_id": "...",
+            "counts": {"pending": N, "extracting": N, "done": N, "failed": N},
+            "total": N
+        }
+
+    Always zero-fills missing statuses so consumers can render a stable
+    progress bar without status-keyed conditionals.
+    """
+    from beever_atlas.stores import get_stores
+
+    await assert_channel_access(principal, channel_id)
+    stores = get_stores()
+    counts = await stores.mongodb.count_channel_messages_by_status(channel_id)
+    total = sum(counts.values())
+    return {
+        "channel_id": channel_id,
+        "counts": counts,
+        "total": total,
+    }
+
+
 @router.delete("/api/channels/{channel_id}/data")
 async def clear_channel_data(
     channel_id: str,
