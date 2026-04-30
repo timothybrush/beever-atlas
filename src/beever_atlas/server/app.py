@@ -45,6 +45,7 @@ from beever_atlas.api.dev import router as dev_router
 from beever_atlas.api.loader_token import router as loader_token_router
 from beever_atlas.api.loaders import router as loader_router
 from beever_atlas.api.admin import router as admin_router
+from beever_atlas.api.sources import router as sources_router
 from beever_atlas.infra.config import get_settings
 from beever_atlas.infra.health import health_registry, register_health_checks
 from beever_atlas.llm.provider import init_llm_provider
@@ -271,6 +272,11 @@ app.include_router(loader_router, dependencies=_loader_auth)
 # token via the legacy `?access_token=` query param would be a bootstrap
 # loop). Mounted without `_auth` to avoid running require_user twice.
 app.include_router(loader_token_router)
+# PR-D — push-source ingest. Auth is per-source HMAC (verified inside
+# the handler), so this router mounts WITHOUT the Bearer-token
+# ``_auth`` dependency. Unsigned or wrong-signature requests get 401
+# from the HMAC verifier before they touch the store.
+app.include_router(sources_router)
 
 # Secure MCP mount (openspec change atlas-mcp-server). The ASGI app was
 # built at module-load time above so its lifespan could be chained into

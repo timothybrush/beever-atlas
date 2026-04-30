@@ -153,3 +153,62 @@ EXTRACTION_STATUS_TRANSITIONS: dict[str, set[str]] = {
     # ``failed → pending`` is the retry path (worker auto-retry, PR-C).
     "failed": {"pending"},
 }
+
+
+# ---------------------------------------------------------------------------
+# Push-source ingest (PR-D of oss-pipeline-and-wiki-redesign)
+# ---------------------------------------------------------------------------
+
+
+class ExternalSource(BaseModel):
+    """A registered push-source (e.g. OpenClaw, Hermes Agent runtime).
+
+    The plaintext HMAC secret is stored alongside its sha256 fingerprint
+    — verification needs the plaintext (HMAC requires the key) and the
+    fingerprint lets the registry detect rotation events. At OSS scale
+    this is acceptable; an enterprise tier would source the plaintext
+    from a KMS (the verification path stays the same — the KMS is just
+    a different lookup).
+
+    Rotation: ``upsert_external_source`` sets ``rotated_at`` whenever
+    the row is updated, so old in-flight signatures fail validation
+    immediately on the next request.
+    """
+
+    source_id: str
+    """Stable opaque identifier — the URL path component for ingest
+    (``POST /api/sources/{source_id}/events``). Convention: lowercase
+    with-dashes-or-underscores. Example: ``openclaw-prod``."""
+
+    secret: str
+    """Plaintext HMAC-SHA256 signing key. Recommended length 32+ bytes
+    of random entropy. Stored to support verification."""
+
+    secret_fingerprint: str = ""
+    """sha256 hex of ``secret`` — exposed in admin endpoints so an
+    operator can confirm a rotation took effect without leaking the
+    actual key. Auto-derived in ``upsert_external_source``."""
+
+    allowed_channels_pattern: str = "*"
+    """Glob-style channel filter. ``*`` accepts any channel. Used to
+    scope a source to a single workspace or owner without coupling auth
+    to the URL path."""
+
+    description: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
+    rotated_at: datetime | None = None
+
+
+class IdempotencyKeyRecord(BaseModel):
+    """One row per ``(source_id, idempotency_key)`` reservation.
+
+    Auto-expires via Mongo TTL after 24h so retries within the
+    advertised replay window return the cached 202 response and
+    retries beyond it (where re-processing is fine because content-
+    hash deterministic IDs prevent duplicates) hit the slow path.
+    """
+
+    source_id: str
+    idempotency_key: str
+    response: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))

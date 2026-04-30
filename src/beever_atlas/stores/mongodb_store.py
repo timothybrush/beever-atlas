@@ -18,6 +18,8 @@ from beever_atlas.models import (
 from beever_atlas.models.persistence import (
     EXTRACTION_STATUS_TRANSITIONS,
     ChannelMessage,
+    ExternalSource,
+    IdempotencyKeyRecord,
 )
 from beever_atlas.models.sync_policy import (
     ChannelPolicy,
@@ -44,6 +46,9 @@ class MongoDBStore:
         # the prior in-memory ``list[NormalizedMessage]`` flow during sync and
         # serves as the queue substrate for the future ExtractionWorker (PR-B).
         self._channel_messages = self._db["channel_messages"]
+        # PR-D: push-source registry + idempotency replay cache.
+        self._external_sources = self._db["external_sources"]
+        self._idempotency_keys = self._db["idempotency_keys"]
 
     @property
     def db(self):
@@ -82,6 +87,23 @@ class MongoDBStore:
             partialFilterExpression={
                 "extraction_status": {"$in": ["pending", "extracting", "failed"]}
             },
+        )
+        # PR-D: push-source registry + idempotency replay cache.
+        await self._external_sources.create_index(
+            "source_id",
+            unique=True,
+            name="external_sources_source_id_unique",
+        )
+        await self._idempotency_keys.create_index(
+            [("source_id", 1), ("idempotency_key", 1)],
+            unique=True,
+            name="idempotency_keys_compound_unique",
+        )
+        # 24h TTL — Mongo deletes documents whose ``created_at`` is older.
+        await self._idempotency_keys.create_index(
+            "created_at",
+            expireAfterSeconds=86400,
+            name="idempotency_keys_ttl",
         )
         # Seed global policy defaults from Settings if not present
         existing = await self._global_policy_defaults.find_one({"id": "global"})
@@ -1057,6 +1079,95 @@ class MongoDBStore:
             )
         result = await self._channel_messages.bulk_write(ops, ordered=False)
         return result.modified_count
+
+    # ------------------------------------------------------------------
+    # Push-source registry (PR-D)
+    # ------------------------------------------------------------------
+
+    async def get_external_source(self, source_id: str) -> ExternalSource | None:
+        """Fetch the registered external source by id, or None if missing.
+
+        Used by the HMAC verifier on every push-event request to look
+        up the secret hash + the allowed-channels glob.
+        """
+        doc = await self._external_sources.find_one({"source_id": source_id})
+        if doc is None:
+            return None
+        doc.pop("_id", None)
+        return ExternalSource.model_validate(doc)
+
+    async def upsert_external_source(self, source: ExternalSource) -> None:
+        """Register or rotate an external source.
+
+        Auto-derives ``secret_fingerprint`` from ``secret`` so callers
+        don't have to. Sets ``rotated_at`` on every update so any
+        in-flight signatures with a previous secret fail validation
+        immediately on the next request.
+        """
+        from beever_atlas.services.push_hmac import hash_secret
+
+        doc = source.model_dump(mode="json")
+        doc["secret_fingerprint"] = hash_secret(source.secret)
+        existing = await self._external_sources.find_one({"source_id": source.source_id})
+        if existing is not None:
+            doc["rotated_at"] = datetime.now(tz=UTC).isoformat()
+        await self._external_sources.update_one(
+            {"source_id": source.source_id},
+            {"$set": doc},
+            upsert=True,
+        )
+
+    async def delete_external_source(self, source_id: str) -> bool:
+        result = await self._external_sources.delete_one({"source_id": source_id})
+        return bool(result.deleted_count)
+
+    # ------------------------------------------------------------------
+    # Idempotency replay cache (PR-D)
+    # ------------------------------------------------------------------
+
+    async def get_idempotency_record(
+        self, source_id: str, idempotency_key: str
+    ) -> IdempotencyKeyRecord | None:
+        """Fetch a cached response for a previous request, if any.
+
+        The TTL index drops these after 24h. Within that window, the
+        same ``(source_id, idempotency_key)`` returns the cached 202
+        without re-processing the events — protecting against retries
+        that would otherwise re-deliver the same batch.
+        """
+        doc = await self._idempotency_keys.find_one(
+            {"source_id": source_id, "idempotency_key": idempotency_key}
+        )
+        if doc is None:
+            return None
+        doc.pop("_id", None)
+        return IdempotencyKeyRecord.model_validate(doc)
+
+    async def reserve_idempotency_record(
+        self, source_id: str, idempotency_key: str, response: dict[str, Any]
+    ) -> bool:
+        """Record an idempotency reservation. Returns True if the record
+        was newly inserted; False if an earlier insert won the race
+        (caller should fetch the cached response in that case).
+
+        The compound unique index makes this atomic — two concurrent
+        callers cannot both insert; the loser raises DuplicateKeyError
+        which we catch and return False from.
+        """
+        from pymongo.errors import DuplicateKeyError
+
+        try:
+            await self._idempotency_keys.insert_one(
+                {
+                    "source_id": source_id,
+                    "idempotency_key": idempotency_key,
+                    "response": response,
+                    "created_at": datetime.now(tz=UTC),
+                }
+            )
+            return True
+        except DuplicateKeyError:
+            return False
 
     async def sweep_stale_extracting(self, stale_seconds: int = 600) -> int:
         """Reset rows stuck in ``"extracting"`` for more than ``stale_seconds``
