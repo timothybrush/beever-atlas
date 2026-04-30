@@ -528,6 +528,16 @@ class Settings(BaseSettings):
     # to be effective.
     per_page_wiki: bool = Field(default=False, alias="PER_PAGE_WIKI")
 
+    # OSS pipeline + wiki redesign — PR-F WikiMaintainer mode.
+    # ``manual``: maintainer marks affected pages is_dirty=True on
+    # extraction events; user clicks "Maintain Wiki" to drain the
+    # dirty queue on demand. Default — conservative for soak.
+    # ``auto``: Karpathy-style — maintainer auto-fires per-page LLM
+    # rewrite on every extraction event. Flip to ``auto`` only after
+    # the 2-week A/B comparison confirms incremental quality matches
+    # full-regenerate quality on three real channels.
+    wiki_maintenance_mode: str = Field(default="manual", alias="WIKI_MAINTENANCE_MODE")
+
     # Single-tenant compatibility mode for the v1.0 OSS launch. When True,
     # any authenticated user principal is granted access to channels whose
     # owning PlatformConnection has ``owner_principal_id`` set to the shared
