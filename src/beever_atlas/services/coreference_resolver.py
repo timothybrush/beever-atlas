@@ -45,11 +45,16 @@ async def fetch_channel_history(
         from beever_atlas.stores import get_stores
 
         stores = get_stores()
+        # PR-A.4: read from `channel_messages` (PR-A.3 sync writes) instead of
+        # the phantom `raw_messages` collection. ``message_id`` replaces the
+        # legacy ``message_ts`` field; ``content`` replaces ``text``. Sort uses
+        # the new ``timestamp`` datetime field, which the
+        # `(channel_id, timestamp)` secondary index serves directly.
         records = (
-            await stores.mongodb.db["raw_messages"]
+            await stores.mongodb.db["channel_messages"]
             .find(
                 {"channel_id": channel_id},
-                sort=[("message_ts", -1)],
+                sort=[("timestamp", -1)],
                 limit=limit,
             )
             .to_list(length=limit)
@@ -57,8 +62,8 @@ async def fetch_channel_history(
         return [
             {
                 "author": r.get("author_name") or r.get("author") or "unknown",
-                "text": r.get("text") or r.get("content") or "",
-                "ts": r.get("message_ts") or r.get("ts") or "",
+                "text": r.get("content") or r.get("text") or "",
+                "ts": r.get("message_id") or r.get("ts") or "",
             }
             for r in reversed(records)
         ]

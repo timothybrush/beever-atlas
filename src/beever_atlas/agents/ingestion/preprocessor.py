@@ -248,11 +248,20 @@ async def _resolve_cross_batch_parent(
 
         stores = get_stores()
 
-        # Try MongoDB first
-        record = await stores.mongodb.db["raw_messages"].find_one({"message_ts": thread_ts})
+        # PR-A.4: Replace the phantom `raw_messages` collection (referenced
+        # but never written in production code paths) with the durable
+        # `channel_messages` collection populated by the sync runner in PR-A.3.
+        # The thread_ts in Slack/Discord/Teams equals the parent's message_id;
+        # narrow by channel_id when available to stay on the (channel_id,
+        # timestamp) secondary index.
+        channel_id = msg.get("channel_id")
+        query: dict[str, Any] = {"message_id": thread_ts}
+        if channel_id:
+            query["channel_id"] = channel_id
+        record = await stores.mongodb.db["channel_messages"].find_one(query)
         if record:
             author = record.get("author_name") or record.get("author") or "unknown"
-            text = (record.get("text") or record.get("content") or "").strip()
+            text = (record.get("content") or record.get("text") or "").strip()
             if len(text) > max_len:
                 text = text[: max_len - 3] + "..."
             return f"[Reply to {author}: {text}]"
