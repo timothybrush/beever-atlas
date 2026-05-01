@@ -1,8 +1,8 @@
 # Handoff — OSS Pipeline + LLM Wiki Redesign
 
 **Branch:** `redesign/oss-pipeline-and-wiki` (pushed to origin)
-**Last commit pushed:** `1f55bcf feat(api): POST /api/channels/{id}/wiki/maintain endpoint + scrub PR-x ref`
-**Local commits not yet pushed:** the in-flight PR-x scrub commit (see "In flight" below)
+**Last commit pushed:** `2bfe470 feat(server): wire WikiMaintainer singleton + ExtractionWorker subscription in lifespan`
+**Local commits not yet pushed:** none — branch is in sync with origin
 
 This file is the cross-session handoff. Read it first, then `docs/architecture/oss-pipeline.md` for the full architecture context.
 
@@ -18,155 +18,52 @@ This file is the cross-session handoff. Read it first, then `docs/architecture/o
 | **Env var consolidation 12 → 6** | ✅ Shipped, three Opus reviews APPROVED |
 | **`.env.example` simplified** | ✅ One-line per flag |
 | **Local `.env` updated** | ✅ User's `.env` has the 6 new flags |
-| **PR-x reference scrub** | 🟡 In flight — see below |
+| **PR-x reference scrub** | ✅ Shipped — committed in 2bbf857 + 0d7e51e |
+| **WikiMaintainer lifespan wiring** | ✅ Shipped — committed in 2bfe470 (init + ExtractionWorker subscription) |
 | **MCP tools** | ❌ Not started — see below |
 | **Migration script (legacy → wiki_pages)** | ❌ Not started |
 | **Integration docs** | ❌ Not started |
-| **WikiMaintainer lifespan wiring** | ❌ Not started — endpoint returns `reason=maintainer_not_initialized` until this lands |
 
 ---
 
-## 🔄 In flight when context ran out
+## ✅ Recently shipped (this session)
 
-A background `executor` agent (id `ac7dec086e21325a0`) was scrubbing ~120 internal `PR-A.x` / `PR-B.x` / `code-review` references from code comments across ~25 backend files in `src/beever_atlas/`. The scrubbing is comment/docstring rewrites only — no behavior changes.
-
-**To check what the agent did:**
-
-```bash
-# See unstaged backend changes (the scrub edits)
-git status --short src/
-
-# See which files still have PR-x references
-grep -rn "PR-[A-G]\b\|PR-0\b\|Code-review\|code-review" src/beever_atlas/ | head -30
-```
-
-**Files definitely scrubbed** (visible in unstaged diff at handoff time):
-- `src/beever_atlas/adapters/source_protocol.py`
-- `src/beever_atlas/api/channels.py`
-- `src/beever_atlas/api/sources.py`
-- `src/beever_atlas/infra/config.py`
-- `src/beever_atlas/models/persistence.py`
-- `src/beever_atlas/services/extraction_worker.py`
-- `src/beever_atlas/services/sync_runner.py`
-- `src/beever_atlas/stores/mongodb_store.py`
-- `src/beever_atlas/wiki/page_store.py`
-
-**Files possibly NOT yet scrubbed** (verify before committing):
-- `src/beever_atlas/services/batch_processor.py`
-- `src/beever_atlas/services/wiki_maintainer.py`
-- `src/beever_atlas/services/scheduler.py`
-- `src/beever_atlas/services/circuit_breaker.py`
-- `src/beever_atlas/scripts/migrate_imported_messages_to_channel_messages.py`
-- `src/beever_atlas/llm/provider.py`
-- `src/beever_atlas/services/wiki_lint.py`
-- `src/beever_atlas/services/coreference_resolver.py`
-- `src/beever_atlas/models/domain.py`
-- `src/beever_atlas/api/imports.py`
-- `src/beever_atlas/agents/ingestion/preprocessor.py`
-
-**Coordination note:** I asked the scrub agent to SKIP `src/beever_atlas/api/wiki.py` because I added the `/maintain` endpoint there myself (and scrubbed its one PR-G ref inline).
-
-**To finish the scrub work:**
-
-```bash
-# 1. Verify tests still pass on the unstaged changes:
-uv run pytest tests/services/test_extraction_worker.py tests/services/test_circuit_breaker.py \
-  tests/stores/test_channel_messages_store.py tests/api/test_push_source_events.py \
-  tests/wiki/test_page_store.py tests/test_sync_runner.py -x -q
-
-# 2. Continue scrubbing the remaining files using the same translation rules:
-#    - "PR-A: durable Message Store ..."        → "Durable Message Store ..."
-#    - "PR-B: ExtractionWorker..."              → "Background ExtractionWorker..."
-#    - "PR-A.6.1 (review issue 17): ..."        → "..." with technical context preserved
-#    - "Code-review HIGH (second pass): ..."    → keep the technical concern, drop the PR/review label
-#    - "tasks.md section 2g.1"                  → "the rollout runbook in docs/architecture/oss-pipeline.md"
-#    - PRESERVE spec/path references like `openspec/changes/.../specs/`
-#    - PRESERVE scenario references like "Spec scenario: ``Same message inserted twice``"
-#    - PRESERVE the `tests/services/test_provider_outage_breaker.py` deprecation marker as-is
-
-# 3. Commit:
-uv run ruff format src/ tests/
-git add -A src/
-git commit -m "docs: scrub internal PR-x references from code comments for OSS readability
-
-- N files updated, ~120 PR-x and code-review references rewritten as
-  self-explanatory technical commentary
-- No code behavior changed
-- Spec and scenario references preserved
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
-
-# 4. Push:
-git push origin redesign/oss-pipeline-and-wiki
-```
+- **PR-x scrub completed** — 11 staged files committed in `0d7e51e`; second batch (~30 references) followed the same translation rules as the prior `2bbf857`. 90/90 targeted tests green, ruff format clean.
+- **WikiMaintainer lifespan wiring** — committed in `2bfe470`. `WikiPageStore` + `WikiMaintainer` are initialised in `src/beever_atlas/server/app.py` after `SyncScheduler.startup()`, then `worker.subscribe_extraction_done(...)` registers a `create_task` callback that fans extraction batches to `maintainer.on_extraction_done(channel_id, fact_ids, mode=settings.wiki_maintenance_mode)`. 130/130 targeted tests green.
+- `POST /api/channels/{id}/wiki/maintain` no longer returns `reason=maintainer_not_initialized`; `WIKI_MAINTENANCE_MODE=auto` now actually fires per-batch.
 
 ---
 
 ## 📋 Remaining work (prioritized)
 
-### 🔴 P0 — Must finish to fully ship
-
-1. **Finish the PR-x scrub** (above). Probably 30-60 min if the background agent's stale or didn't commit.
-
-2. **WikiMaintainer lifespan wiring** (~10 min)
-   - File: `src/beever_atlas/server/app.py` (the FastAPI lifespan)
-   - The new `POST /wiki/maintain` endpoint returns `reason=maintainer_not_initialized` because no code calls `init_wiki_maintainer()` at startup.
-   - Need to add to the lifespan startup:
-     ```python
-     from beever_atlas.services.wiki_maintainer import WikiMaintainer, init_wiki_maintainer
-     from beever_atlas.wiki.page_store import WikiPageStore
-     # After stores are ready:
-     page_store = WikiPageStore(db=stores.mongodb.db)
-     await page_store.ensure_indexes()
-     init_wiki_maintainer(WikiMaintainer(page_store=page_store))
-     ```
-   - Same pattern as `init_extraction_worker` in `services/scheduler.py`.
-
-3. **WikiMaintainer subscribe to ExtractionWorker events** (~15 min)
-   - The maintainer only fires today via the manual button. To make `WIKI_MAINTENANCE_MODE=auto` actually work, the maintainer must subscribe to `ExtractionWorker.subscribe_extraction_done()`.
-   - In the lifespan after both singletons are init'd:
-     ```python
-     worker = get_extraction_worker()
-     maintainer = get_wiki_maintainer()
-     if worker and maintainer:
-         worker.subscribe_extraction_done(
-             lambda channel_id, fact_ids: asyncio.create_task(
-                 maintainer.on_extraction_done(
-                     channel_id, fact_ids,
-                     mode=get_settings().wiki_maintenance_mode,
-                 )
-             )
-         )
-     ```
-
 ### 🟡 P1 — Nice to have before staging soak
 
-4. **MCP tool wrappers** (~1 hour)
+1. **MCP tool wrappers** (~1 hour)
    - The endpoints exist. The MCP server in `src/beever_atlas/api/mcp_server/` needs three new tool functions:
      - `search_memory(query, scope?)` — cross-channel agent recall via Weaviate hybrid search
      - `lint_wiki(channel_id)` — proxies POST `/wiki/lint`
      - `get_extraction_status(channel_id)` — proxies GET `/extraction-status`
    - Look at existing tools in `_tools_retrieval.py` for the pattern.
 
-5. **Wiki migration script** (~1 hour)
+2. **Wiki migration script** (~1 hour)
    - Spec task 6.16. One-shot migration from legacy `wiki_cache.pages.{page_id}` subdocs to per-page `wiki_pages` rows.
    - Pattern: copy `src/beever_atlas/scripts/migrate_imported_messages_to_channel_messages.py` and adapt.
    - Idempotent via the compound unique index; supports `--dry-run`.
 
 ### 🟢 P2 — Polish / longer-horizon
 
-6. **Integration docs** — `docs/integrations/openclaw.md`, `hermes.md`, `push-sources.md`
+3. **Integration docs** — `docs/integrations/openclaw.md`, `hermes.md`, `push-sources.md`
    - Spec tasks 5.21-5.23. Cookbook for "register a source + sign a request + handle replays".
 
-7. **Per-channel `wiki_maintenance_mode`** — analyst's recommendation
+4. **Per-channel `wiki_maintenance_mode`** — analyst's recommendation
    - Today it's a global env var. Spec D10 says it should be per-channel.
    - Migration: add `wiki_maintenance_mode` field to the channel document, fall back to env var, expose UI toggle.
 
-8. **Page-voice drift A/B comparator** — spec task 7.19
+5. **Page-voice drift A/B comparator** — spec task 7.19
    - The maintainer has the seam; need the actual comparator that runs both `apply_update` and `WikiBuilder.generate_wiki` in parallel during soak and reports edit-distance.
    - Two-week comparison gates the `WIKI_MAINTENANCE_MODE=auto` default flip.
 
-9. **Re-run the full code review** after the scrub commit lands. Three Opus passes have already approved; this is a smoke check that the scrub didn't introduce subtle issues.
+6. **Re-run the full code review** after the lifespan-wiring commit lands on `main`. Three Opus passes already approved the prior state; this is a smoke check that the scrub + lifespan wiring didn't introduce subtle issues.
 
 ---
 
@@ -183,7 +80,7 @@ git push origin redesign/oss-pipeline-and-wiki
 
 ### Weaknesses honestly:
 
-1. **`WIKI_MAINTENANCE_MODE` is still global, not per-channel.** Operators can't tell channel A "auto" and channel B "manual" without code change. Acknowledged limitation; tracked as P2.7 above.
+1. **`WIKI_MAINTENANCE_MODE` is still global, not per-channel.** Operators can't tell channel A "auto" and channel B "manual" without code change. Acknowledged limitation; tracked as P2.4 above.
 
 2. **Failover seam is dead code in OSS.** `_FAILOVER_ENABLED=False` ships disabled because OSS doesn't have a second-provider key (Gemini Flash Lite as fallback for Gemini Pro is same-provider — when the primary's down so is the fallback). Real cross-provider failover needs enterprise tier.
 
@@ -220,6 +117,9 @@ git push origin redesign/oss-pipeline-and-wiki
 ## 📦 Branch contents — commit log (newest first)
 
 ```
+2bfe470 feat(server): wire WikiMaintainer singleton + ExtractionWorker subscription in lifespan
+0d7e51e docs: scrub remaining PR-x references from code comments for OSS readability
+2bbf857 docs: scrub internal PR-x references from code comments for OSS readability
 1f55bcf feat(api): POST /api/channels/{id}/wiki/maintain endpoint + scrub PR-x ref
 af4bf4c feat(web): wiki Tensions / Lint / Maintain UI + extraction-status progress row + simpler env doc
 d9a048f docs(redesign): scrub stale LLM_FAILOVER_ENABLED references after env-var cleanup
@@ -242,7 +142,7 @@ bf32cdd feat(extraction): ExtractionWorker class + atomic claim primitives
 ... PR-A commits (10 more)
 ```
 
-29 commits ahead of `main`. Net diff ≈ +10,000 / -400 lines.
+31 commits ahead of `main`. Net diff ≈ +10,000 / -400 lines.
 
 ---
 
@@ -252,9 +152,9 @@ bf32cdd feat(extraction): ExtractionWorker class + atomic claim primitives
 2. ✅ Web tests + tsc green (already verified)
 3. ✅ `.env.example` clean and documented
 4. ✅ `docs/architecture/oss-pipeline.md` reflects final state
-5. 🟡 PR-x scrub committed and pushed (in flight — see "In flight" above)
-6. ❌ WikiMaintainer init in lifespan (P0.2 above)
-7. ❌ WikiMaintainer subscribed to worker events (P0.3 above)
+5. ✅ PR-x scrub committed and pushed (`2bbf857` + `0d7e51e`)
+6. ✅ WikiMaintainer init in lifespan (`2bfe470`)
+7. ✅ WikiMaintainer subscribed to worker events (`2bfe470`)
 8. Open PR(s) from `redesign/oss-pipeline-and-wiki` to `main` (or merge directly)
 9. Walk the 10-step rollout in `docs/architecture/oss-pipeline.md`
 
