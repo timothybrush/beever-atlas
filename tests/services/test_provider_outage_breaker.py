@@ -11,9 +11,11 @@ and full unit-test coverage at:
     (only one probe at a time), structured log emission, singleton
     wiring, read-only is_open() accessor.
 
-  * ``tests/llm/test_provider_failover_seam.py`` (5 tests):
+  * ``tests/llm/test_provider_failover_seam.py`` (6 tests):
     the failover seam in LLMProvider.resolve_model when the breaker
-    is open AND LLM_FAILOVER_ENABLED=true.
+    is open AND ``llm.provider._FAILOVER_ENABLED`` is True (enterprise
+    enablement path; OSS default keeps the seam disabled — the env
+    var that previously gated this was retired in commit 2aaaf1e).
 
 This file is retained as a deprecation marker so a future reviewer
 sees that the old AC #5 / #6 / #10 / #11 tests were intentionally

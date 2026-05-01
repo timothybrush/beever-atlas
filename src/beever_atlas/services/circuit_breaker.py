@@ -154,10 +154,11 @@ class CircuitBreaker:
         """Cheap synchronous accessor — does NOT advance state.
 
         Used by the LLMProvider failover seam: when this returns True
-        AND ``LLM_FAILOVER_ENABLED`` is on, ``resolve_model`` returns
-        the fallback model rather than the primary. Read-only; will not
-        transition the breaker out of open even if the cooldown has
-        elapsed (only ``allow()`` can do that).
+        AND ``llm.provider._FAILOVER_ENABLED`` is True (enterprise tier),
+        ``resolve_model`` returns the fallback model rather than the
+        primary. Read-only; will not transition the breaker out of
+        open even if the cooldown has elapsed (only ``allow()`` can
+        do that).
         """
         return self._state == "open"
 

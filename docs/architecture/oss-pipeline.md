@@ -50,7 +50,7 @@ agents (OpenClaw, Hermes Agent) as durable memory. This page summarizes the
 | **PR-0** | Cursor advances on fetch success regardless of extraction errors | (no flag) |
 | **PR-A** | Durable Message Store + Source protocol seam | `READ_FROM_MESSAGE_STORE` (OFF) |
 | **PR-B** | Background `ExtractionWorker` + content-hash fact ID + frontend dedupe | `DECOUPLE_EXTRACTION` (OFF) |
-| **PR-C** | Injectable `CircuitBreaker` + provider failover seam + auto-retry | `LLM_FAILOVER_ENABLED` (OFF) |
+| **PR-C** | Injectable `CircuitBreaker` + provider failover seam + auto-retry | (no env flag — failover is out of OSS scope; enterprise tier flips `llm/provider.py:_FAILOVER_ENABLED` in code) |
 | **PR-D** | Push-source HMAC ingest endpoint | (no flag — gated by per-source registration) |
 | **PR-E** | Per-page wiki page-store split | `PER_PAGE_WIKI` (OFF) |
 | **PR-F** | `WikiMaintainer` service (incremental maintainer) | `WIKI_MAINTENANCE_MODE` (`manual`) |
@@ -145,7 +145,7 @@ Tuning constants that are NOT env vars (and where to find them):
 4. **`READ_FILE_IMPORTS_FROM_CHANNEL_MESSAGES=true`** in staging → soak 48h → production.
 5. **`WRITE_DUAL_FILE_IMPORTS=false`** in staging → soak 1 week → production.
 6. **`DECOUPLE_EXTRACTION=true`** in staging → soak 48h → production.
-7. **`LLM_FAILOVER_ENABLED=true`** if multi-provider keys are wired.
+7. **Skip — failover is out of OSS scope.** Enterprise tier flips `llm/provider.py:_FAILOVER_ENABLED = True` and populates `_FALLBACK_MAP` with their multi-provider routing in code, then redeploys.
 8. **`PER_PAGE_WIKI=true`** in staging → soak 48h → production.
 9. **`WIKI_MAINTENANCE_MODE=auto`** only after 2-week A/B comparison on three real channels.
 10. **Drop `imported_messages` collection** — irreversible; final 1-week soak window.
