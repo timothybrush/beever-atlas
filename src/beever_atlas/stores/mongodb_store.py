@@ -1160,10 +1160,15 @@ class MongoDBStore:
     ) -> tuple[list[dict[str, Any]], str | None]:
         """Paginated read of ``channel_messages`` rows with ``extraction_status="failed"``.
 
-        Sorted by ``next_attempt_at`` ascending so the operator sees the
-        next-to-retry rows first. Cursor is the ``message_id`` of the last
-        row returned (opaque to clients). Returns ``(rows, next_cursor)``;
-        ``next_cursor`` is None when no more pages.
+        Sorted + cursor-paginated by ``message_id`` (which is unique within
+        a channel via the compound key). The UI displays ``next_attempt_at``
+        as a column and may sort client-side; using ``message_id`` as the
+        single sort key keeps keyset pagination correct (an earlier draft
+        sorted by ``next_attempt_at`` with a ``message_id`` cursor, which
+        skipped/duplicated rows when the two were not monotonically
+        correlated — caught by code review).
+        Returns ``(rows, next_cursor)``; ``next_cursor`` is None on the
+        final page.
         """
         query: dict[str, Any] = {
             "channel_id": channel_id,
@@ -1182,7 +1187,7 @@ class MongoDBStore:
                 "attempt_count": 1,
                 "last_error": 1,
             },
-            sort=[("next_attempt_at", 1), ("message_id", 1)],
+            sort=[("message_id", 1)],
             limit=limit + 1,  # fetch one extra to detect end-of-page
         ):
             rows.append(doc)
