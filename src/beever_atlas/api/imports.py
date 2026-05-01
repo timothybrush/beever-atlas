@@ -555,8 +555,8 @@ async def commit_import(
             selected_channels=list(file_conn.selected_channels) + [channel_id],
         )
 
-    # PR-A.6.2 — File-imports cutover. New uploads write unconditionally to
-    # ``channel_messages`` with ``source_id="file"`` (the new durable home;
+    # File-imports cutover. New uploads write unconditionally to
+    # ``channel_messages`` with ``source_id="file"`` (the durable home;
     # the migration script seeds historical rows). The legacy
     # ``imported_messages`` collection is also written when
     # ``WRITE_DUAL_FILE_IMPORTS=True`` (default during the rollout soak) so
@@ -572,8 +572,8 @@ async def commit_import(
             await stores.mongodb.upsert_channel_messages(cm_rows)
         except Exception as exc:  # noqa: BLE001 — logged but non-fatal
             # Best-effort write — file imports remain usable via the legacy
-            # collection during the migration window. PR-A.7 close-out
-            # tightens this to a hard error once dual-write goes off.
+            # collection during the migration window. A future close-out
+            # step tightens this to a hard error once dual-write goes off.
             logger.warning(
                 "imports: channel_messages upsert failed for channel=%s err=%s",
                 channel_id,

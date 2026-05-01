@@ -62,7 +62,7 @@ class WriteReconciler:
 
         facts: list[AtomicFact] = []
         for fd in wi.facts:
-            # PR-B: content-derived deterministic ID — same memory_text +
+            # Content-derived deterministic ID — same memory_text +
             # same sorted entity_tags yields the same UUID across retries.
             entity_names = fd.get("entity_tags") or []
             fact_id = AtomicFact.deterministic_id(fd.get("memory_text", ""), entity_names)

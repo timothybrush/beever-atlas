@@ -365,7 +365,7 @@ async def maintain_wiki(
     if maintainer is None:
         # Maintainer not wired in this deployment — manual mode is the
         # default but the singleton is initialised by the FastAPI lifespan.
-        # When PR-F's lifespan wiring lands, this branch falls away.
+        # Once the lifespan wires the singleton, this branch falls away.
         return {"rewritten": 0, "errors": 0, "reason": "maintainer_not_initialized"}
 
     counters = await maintainer.maintain_now(channel_id, target_lang=lang)

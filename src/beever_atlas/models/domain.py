@@ -54,24 +54,23 @@ class AtomicFact(BaseModel):
     def deterministic_id(memory_text: str, entity_names: list[str]) -> str:
         """Generate a content-derived deterministic UUID for idempotent upserts.
 
-        PR-B (`extraction-worker` spec, design D4): switched from a
-        position-based key (``platform:channel_id:message_ts:fact_index``)
-        to a content-derived hash. The position-based key shifted whenever
-        the LLM produced facts in a different order or count on retry,
-        causing phantom Weaviate duplicates. The content hash is stable
-        across reorderings and partial failures.
+        Switched from a position-based key
+        (``platform:channel_id:message_ts:fact_index``) to a content-derived
+        hash. The position-based key shifted whenever the LLM produced facts
+        in a different order or count on retry, causing phantom Weaviate
+        duplicates. The content hash is stable across reorderings and partial
+        failures.
 
         The same fact text + same entity set yields the same UUID; subtly
         different text or a different entity set yields a different UUID.
         Empty ``entity_names`` is permitted (some fact_types like
         ``"observation"`` may extract zero entities).
 
-        Separator: ``\\x00`` (null byte). Code-review found that pipe
-        characters can legitimately appear in LLM-extracted memory_text
-        (\"option A | option B\"), which would alias with the entity
-        join separator and create deterministic collisions across
-        unrelated facts. Null bytes cannot appear in natural-language
-        text, so they are an unambiguous separator.
+        Separator: ``\\x00`` (null byte). Pipe characters can legitimately
+        appear in LLM-extracted memory_text (\"option A | option B\"), which
+        would alias with the entity join separator and create deterministic
+        collisions across unrelated facts. Null bytes cannot appear in
+        natural-language text, so they are an unambiguous separator.
         """
         namespace = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
         normalized_entities = "\x00".join(sorted(str(n) for n in entity_names))

@@ -45,11 +45,11 @@ async def fetch_channel_history(
         from beever_atlas.stores import get_stores
 
         stores = get_stores()
-        # PR-A.4: read from `channel_messages` (PR-A.3 sync writes) instead of
-        # the phantom `raw_messages` collection. ``message_id`` replaces the
-        # legacy ``message_ts`` field; ``content`` replaces ``text``. Sort uses
-        # the new ``timestamp`` datetime field, which the
-        # `(channel_id, timestamp)` secondary index serves directly.
+        # Read from ``channel_messages`` instead of the legacy
+        # ``raw_messages`` collection. ``message_id`` replaces the legacy
+        # ``message_ts`` field; ``content`` replaces ``text``. Sort uses
+        # the ``timestamp`` datetime field, which the
+        # ``(channel_id, timestamp)`` secondary index serves directly.
         records = (
             await stores.mongodb.db["channel_messages"]
             .find(
@@ -59,11 +59,11 @@ async def fetch_channel_history(
             )
             .to_list(length=limit)
         )
-        # PR-A.6.1 (review M1): the legacy ``raw_messages`` schema stored a
-        # Slack-shaped string in ``message_ts``; ``channel_messages`` stores
-        # a real ``timestamp`` datetime. Map back to an ISO string for the
-        # response so cross-platform consumers (Discord snowflake, Mattermost
-        # ID, etc.) keep timestamp-comparable semantics on the ``ts`` key.
+        # The legacy ``raw_messages`` schema stored a Slack-shaped string in
+        # ``message_ts``; ``channel_messages`` stores a real ``timestamp``
+        # datetime. Map back to an ISO string for the response so cross-
+        # platform consumers (Discord snowflake, Mattermost ID, etc.) keep
+        # timestamp-comparable semantics on the ``ts`` key.
         out: list[dict[str, Any]] = []
         for r in reversed(records):
             ts_val = r.get("timestamp")

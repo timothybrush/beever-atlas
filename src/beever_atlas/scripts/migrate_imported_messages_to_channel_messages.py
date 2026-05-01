@@ -26,13 +26,13 @@ state document in the ``migration_state`` collection under the key
 extraction_status default
 -------------------------
 **Pragmatic shortcut**: ALL migrated rows are written with
-``extraction_status="pending"`` so the future ExtractionWorker (PR-B) re-extracts
-them. Re-extraction of already-done messages is wasteful but not corrupting:
+``extraction_status="pending"`` so the ExtractionWorker re-extracts them.
+Re-extraction of already-done messages is wasteful but not corrupting:
 
-  * PR-A.1's ``$setOnInsert`` semantics keep the worker's per-message
-    state immutable on existing rows once it claims them.
-  * PR-B will use a content-derived deterministic fact ID so duplicate
-    extraction yields the same Weaviate row id (idempotent write).
+  * The ``$setOnInsert`` semantics keep the worker's per-message state
+    immutable on existing rows once it claims them.
+  * The ExtractionWorker uses a content-derived deterministic fact ID so
+    duplicate extraction yields the same Weaviate row id (idempotent write).
 
 The alternative — querying Neo4j ``MessageNode`` and Weaviate by message_id
 to derive ``done`` vs ``pending`` per row — is significantly more expensive

@@ -272,10 +272,10 @@ app.include_router(loader_router, dependencies=_loader_auth)
 # token via the legacy `?access_token=` query param would be a bootstrap
 # loop). Mounted without `_auth` to avoid running require_user twice.
 app.include_router(loader_token_router)
-# PR-D — push-source ingest. Auth is per-source HMAC (verified inside
-# the handler), so this router mounts WITHOUT the Bearer-token
-# ``_auth`` dependency. Unsigned or wrong-signature requests get 401
-# from the HMAC verifier before they touch the store.
+# Push-source ingest. Auth is per-source HMAC (verified inside the
+# handler), so this router mounts WITHOUT the Bearer-token ``_auth``
+# dependency. Unsigned or wrong-signature requests get 401 from the
+# HMAC verifier before they touch the store.
 app.include_router(sources_router)
 
 # Secure MCP mount (openspec change atlas-mcp-server). The ASGI app was

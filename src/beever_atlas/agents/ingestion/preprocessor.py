@@ -248,12 +248,11 @@ async def _resolve_cross_batch_parent(
 
         stores = get_stores()
 
-        # PR-A.4: Replace the phantom `raw_messages` collection (referenced
-        # but never written in production code paths) with the durable
-        # `channel_messages` collection populated by the sync runner in PR-A.3.
-        # The thread_ts in Slack/Discord/Teams equals the parent's message_id;
-        # narrow by channel_id when available to stay on the (channel_id,
-        # timestamp) secondary index.
+        # Use the durable ``channel_messages`` collection instead of the
+        # legacy ``raw_messages`` collection. The thread_ts in
+        # Slack/Discord/Teams equals the parent's message_id; narrow by
+        # channel_id when available to stay on the (channel_id, timestamp)
+        # secondary index.
         channel_id = msg.get("channel_id")
         query: dict[str, Any] = {"message_id": thread_ts}
         if channel_id:

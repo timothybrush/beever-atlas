@@ -98,7 +98,7 @@ class WikiCache:
 
     async def get_page(self, channel_id: str, page_id: str, target_lang: str = "en") -> dict | None:
         await self._ensure_db()
-        # PR-E: when PER_PAGE_WIKI=True, read from the new wiki_pages
+        # When PER_PAGE_WIKI=True, read from the new wiki_pages
         # collection. Falls back to the legacy monolith doc when the
         # per-page row is missing — migration may run lazily / only on
         # first save_page call, so during the soak window pages can

@@ -1,4 +1,4 @@
-"""HMAC-SHA256 verifier for push-source ingest events (PR-D).
+"""HMAC-SHA256 verifier for push-source ingest events.
 
 Validates the ``X-Beever-Signature`` header on
 ``POST /api/sources/{source_id}/events``. Sister to the loader-token

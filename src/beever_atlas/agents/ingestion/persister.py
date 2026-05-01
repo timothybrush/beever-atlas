@@ -177,7 +177,7 @@ class PersisterAgent(BaseAgent):
         for idx, fd in enumerate(embedded_facts):
             # Use session channel_id — the LLM output doesn't include it.
             fact_channel_id = fd.get("channel_id") or channel_id
-            # PR-B (design D4): content-derived deterministic ID. The previous
+            # Content-derived deterministic ID. The previous
             # ``(platform, channel_id, message_ts, idx)`` key shifted whenever
             # the LLM produced facts in a different order on retry, creating
             # phantom Weaviate duplicates. ``idx`` is intentionally unused now.
