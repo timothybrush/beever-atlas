@@ -688,6 +688,67 @@ async def get_thread_messages(
     ]
 
 
+_FAILURE_LAST_ERROR_TRUNCATE = 500
+
+
+def _strip_traceback(raw: str | None) -> str:
+    """Drop Python traceback bodies from a stored exception message.
+
+    The worker stores ``str(exc)`` (often just the exception class +
+    message), but if a layer above it stored ``traceback.format_exc()``
+    instead, we MUST not echo the raw stack to operators — too easy to
+    leak file paths or library internals into a UI.
+    """
+    if not raw:
+        return ""
+    text = raw
+    # Common Python traceback marker — keep only the final ``ExcClass: msg`` line.
+    if "Traceback (most recent call last):" in text:
+        # Take everything after the last newline (last frame is usually
+        # ``ExcClass: msg``); fall back to the whole string if no newline.
+        text = text.rstrip().split("\n")[-1].strip()
+    return text[:_FAILURE_LAST_ERROR_TRUNCATE]
+
+
+@router.get("/api/channels/{channel_id}/extraction-failures")
+async def get_channel_extraction_failures(
+    channel_id: str,
+    cursor: str | None = None,
+    limit: int = 50,
+    principal: Principal = Depends(require_user),
+) -> dict[str, Any]:
+    """Paginated list of ``channel_messages`` rows stuck in ``extraction_status="failed"``.
+
+    Backs the wiki UI's ``FailedBatchPanel`` drill-down. Each row carries
+    ``message_id``, ``next_attempt_at``, ``attempt_count``, and a
+    server-truncated ``last_error`` (max 500 chars, stack traces stripped).
+    Cursor-paginated; ``next_cursor`` is non-null when more rows remain.
+    Default page size 50, capped at 200.
+    """
+    from beever_atlas.stores import get_stores
+
+    await assert_channel_access(principal, channel_id)
+    safe_limit = max(1, min(int(limit), 200))
+    stores = get_stores()
+    rows, next_cursor = await stores.mongodb.list_failed_channel_messages(
+        channel_id, cursor=cursor, limit=safe_limit
+    )
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        next_attempt = row.get("next_attempt_at")
+        if hasattr(next_attempt, "isoformat"):
+            next_attempt = next_attempt.isoformat()
+        items.append(
+            {
+                "message_id": row.get("message_id"),
+                "next_attempt_at": next_attempt,
+                "attempt_count": int(row.get("attempt_count", 0) or 0),
+                "last_error": _strip_traceback(row.get("last_error")),
+            }
+        )
+    return {"items": items, "next_cursor": next_cursor}
+
+
 @router.get("/api/channels/{channel_id}/extraction-status")
 async def get_channel_extraction_status(
     channel_id: str,

@@ -1127,6 +1127,72 @@ class MongoDBStore:
         result = await self._external_sources.delete_one({"source_id": source_id})
         return bool(result.deleted_count)
 
+    async def list_external_sources(self) -> list[ExternalSource]:
+        """Enumerate registered external sources for the admin UI.
+
+        Plaintext secrets are filtered out by the ``ExternalSource`` model
+        (``Field(exclude=True)``), so it is safe to serialize the returned
+        objects to admin responses. The plaintext is only ever returned
+        once on creation/rotation by the admin handler, never on list.
+        """
+        cursor = self._external_sources.find({}).sort("source_id", 1)
+        sources: list[ExternalSource] = []
+        async for doc in cursor:
+            doc.pop("_id", None)
+            sources.append(ExternalSource.model_validate(doc))
+        return sources
+
+    async def count_idempotency_replays_for_source(self, source_id: str) -> int:
+        """Approximate replay count for a source over the active window.
+
+        The ``idempotency_keys`` collection auto-expires via TTL after 24h,
+        so a count today is the count over the last 24h. Returned in the
+        admin list so operators can spot a noisy / flapping source.
+        """
+        return int(await self._idempotency_keys.count_documents({"source_id": source_id}))
+
+    async def list_failed_channel_messages(
+        self,
+        channel_id: str,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Paginated read of ``channel_messages`` rows with ``extraction_status="failed"``.
+
+        Sorted by ``next_attempt_at`` ascending so the operator sees the
+        next-to-retry rows first. Cursor is the ``message_id`` of the last
+        row returned (opaque to clients). Returns ``(rows, next_cursor)``;
+        ``next_cursor`` is None when no more pages.
+        """
+        query: dict[str, Any] = {
+            "channel_id": channel_id,
+            "extraction_status": "failed",
+        }
+        if cursor:
+            query["message_id"] = {"$gt": cursor}
+
+        rows: list[dict[str, Any]] = []
+        async for doc in self._channel_messages.find(
+            query,
+            projection={
+                "_id": 0,
+                "message_id": 1,
+                "next_attempt_at": 1,
+                "attempt_count": 1,
+                "last_error": 1,
+            },
+            sort=[("next_attempt_at", 1), ("message_id", 1)],
+            limit=limit + 1,  # fetch one extra to detect end-of-page
+        ):
+            rows.append(doc)
+
+        next_cursor: str | None = None
+        if len(rows) > limit:
+            extra = rows.pop()
+            next_cursor = str(extra.get("message_id") or "")
+        return rows, next_cursor
+
     # ------------------------------------------------------------------
     # Idempotency replay cache
     # ------------------------------------------------------------------
