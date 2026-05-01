@@ -114,7 +114,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
 export function ChannelSettingsTab() {
   const { id } = useParams<{ id: string }>();
   const channelId = id ?? "";
-  const { policy, isLoading, error, savePolicy, deletePolicy } = useChannelPolicy(channelId);
+  const { policy, isLoading, savePolicy, deletePolicy } = useChannelPolicy(channelId);
 
   const [sync, setSync] = useState<SyncConfig>(DEFAULT_SYNC);
   const [ingestion, setIngestion] = useState<IngestionConfig>(DEFAULT_INGESTION);
@@ -158,8 +158,14 @@ export function ChannelSettingsTab() {
     try {
       await savePolicy({ sync, ingestion, consolidation, wiki });
       setFeedback({ kind: "success", message: "Settings saved." });
-    } catch {
-      setFeedback({ kind: "error", message: error ?? "Failed to save." });
+    } catch (err: unknown) {
+      // Use the caught error directly — the hook's ``error`` field is a
+      // stale closure value from the render that created this callback,
+      // not the error just thrown by ``savePolicy``.
+      setFeedback({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Failed to save.",
+      });
     } finally {
       setSaving(false);
     }
@@ -171,8 +177,11 @@ export function ChannelSettingsTab() {
     try {
       await deletePolicy();
       setFeedback({ kind: "success", message: "Reset to defaults." });
-    } catch {
-      setFeedback({ kind: "error", message: error ?? "Failed to reset." });
+    } catch (err: unknown) {
+      setFeedback({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Failed to reset.",
+      });
     } finally {
       setResetting(false);
     }
@@ -505,7 +514,17 @@ export function ChannelSettingsTab() {
                     name="wiki_maintenance_mode"
                     checked={(wiki.maintenance_mode ?? "inherit") === opt.value}
                     onChange={() =>
-                      setWiki((prev) => ({ ...prev, maintenance_mode: opt.value }))
+                      setWiki((prev) => ({
+                        ...prev,
+                        // "Inherit" must serialise as ``null`` so the
+                        // server falls through to the global env default;
+                        // sending the literal string ``"inherit"`` would
+                        // either 422 or break the inheritance chain.
+                        maintenance_mode:
+                          opt.value === "inherit"
+                            ? null
+                            : (opt.value as "auto" | "manual"),
+                      }))
                     }
                     className="accent-primary mt-0.5"
                   />

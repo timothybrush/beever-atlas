@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertTriangle, ClipboardCheck, Loader2, RefreshCw, Sparkles, X, ListX } from "lucide-react";
 import { useWikiLint } from "@/hooks/useWikiLint";
 import { useWikiMaintain } from "@/hooks/useWikiMaintain";
@@ -38,6 +38,22 @@ export function WikiHealthToolbar({ channelId, manualMode = true }: Props) {
   const maintain = useWikiMaintain(channelId);
   const [reportOpen, setReportOpen] = useState(false);
   const [failuresOpen, setFailuresOpen] = useState(false);
+
+  // Close any open panel on Escape so keyboard users can dismiss them
+  // without mouse focus on the close button. Both panels carry
+  // ``aria-modal="true"`` (set on the dialog elements below) so screen
+  // readers announce them correctly.
+  useEffect(() => {
+    if (!reportOpen && !failuresOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setReportOpen(false);
+        setFailuresOpen(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [reportOpen, failuresOpen]);
 
   const findingsCount = lint.report?.findings.length ?? 0;
   const errorCount = lint.report?.findings.filter((f) => f.severity === "error").length ?? 0;
@@ -106,7 +122,12 @@ export function WikiHealthToolbar({ channelId, manualMode = true }: Props) {
 
       <button
         aria-label="View failed extractions"
-        onClick={() => setFailuresOpen((v) => !v)}
+        onClick={() => {
+          // Mutually exclusive — opening failures closes the lint panel
+          // so the two side panels never stack on top of each other.
+          setReportOpen(false);
+          setFailuresOpen((v) => !v);
+        }}
         disabled={!channelId}
         className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
@@ -118,6 +139,7 @@ export function WikiHealthToolbar({ channelId, manualMode = true }: Props) {
       {reportOpen && (
         <div
           role="dialog"
+          aria-modal="true"
           aria-label="Lint findings"
           className="fixed right-0 top-0 z-40 h-full w-full max-w-sm md:w-96 bg-background border-l border-border shadow-2xl flex flex-col"
         >
@@ -220,7 +242,7 @@ export function WikiHealthToolbar({ channelId, manualMode = true }: Props) {
                   setReportOpen(false);
                   setFailuresOpen(true);
                 }}
-                aria-label="View failed extractions"
+                aria-label="Switch to failed extractions panel"
                 className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs rounded-md border border-border hover:bg-muted transition-colors"
               >
                 <ListX size={12} />

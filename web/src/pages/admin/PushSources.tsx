@@ -3,6 +3,22 @@ import { Plus, RotateCw, Trash2, Copy, Check, X, ShieldAlert } from "lucide-reac
 import { api, adminHeaders } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
+// Modal a11y helper
+// ---------------------------------------------------------------------------
+
+/** Close the modal on Escape so keyboard users have a non-mouse exit. */
+function useEscapeToClose(active: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [active, onClose]);
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -54,6 +70,7 @@ interface SecretRevealModalProps {
 
 function SecretRevealModal({ secret, onClose }: SecretRevealModalProps) {
   const [copied, setCopied] = useState(false);
+  useEscapeToClose(true, onClose);
 
   async function handleCopy() {
     try {
@@ -66,7 +83,12 @@ function SecretRevealModal({ secret, onClose }: SecretRevealModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Source secret"
+    >
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between">
@@ -134,6 +156,7 @@ function RegisterSourceModal({ onClose, onCreated }: RegisterSourceModalProps) {
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEscapeToClose(true, onClose);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -160,7 +183,12 @@ function RegisterSourceModal({ onClose, onCreated }: RegisterSourceModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Register source"
+    >
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
         <div className="px-6 py-4 border-b border-border flex items-center justify-between">
@@ -257,8 +285,30 @@ interface ConfirmModalProps {
 }
 
 function ConfirmModal({ title, message, confirmLabel = "Confirm", onConfirm, onClose, danger = false }: ConfirmModalProps) {
+  // Disable the confirm button while ``onConfirm`` is in flight so a
+  // double-click cannot fire two rotate / delete requests. The parent
+  // closes the modal after the promise resolves; if it doesn't resolve
+  // we leave the button disabled so the user knows something is happening.
+  const [confirming, setConfirming] = useState(false);
+  useEscapeToClose(true, onClose);
+
+  async function handleConfirm() {
+    if (confirming) return;
+    setConfirming(true);
+    try {
+      await Promise.resolve(onConfirm());
+    } finally {
+      setConfirming(false);
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
       <div className="relative z-10 w-full max-w-sm bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
         <div className="px-6 py-4 border-b border-border">
@@ -270,14 +320,15 @@ function ConfirmModal({ title, message, confirmLabel = "Confirm", onConfirm, onC
         <div className="px-6 pb-5 flex items-center gap-2">
           <button
             type="button"
-            onClick={onConfirm}
-            className={`flex-1 inline-flex items-center justify-center px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            onClick={handleConfirm}
+            disabled={confirming}
+            className={`flex-1 inline-flex items-center justify-center px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               danger
                 ? "bg-rose-600 text-white hover:bg-rose-700"
                 : "bg-primary text-primary-foreground hover:bg-primary/90"
             }`}
           >
-            {confirmLabel}
+            {confirming ? "..." : confirmLabel}
           </button>
           <button
             type="button"

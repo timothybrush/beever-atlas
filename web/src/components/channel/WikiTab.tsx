@@ -716,6 +716,8 @@ export function WikiTab() {
         {showEnrichmentRow && extractionStatus && (
           <div
             data-testid="enrichment-status-row"
+            role="status"
+            aria-live="polite"
             className="mb-4 flex items-center gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-foreground"
           >
             <Loader2 className="h-4 w-4 animate-spin text-primary shrink-0" />

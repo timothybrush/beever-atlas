@@ -91,6 +91,7 @@ export function FailedBatchPanel({ channelId, onClose }: Props) {
   return (
     <div
       role="dialog"
+      aria-modal="true"
       aria-label="Failed extractions"
       className="fixed right-4 top-20 z-30 w-[420px] max-h-[70vh] flex flex-col rounded-lg border border-border bg-background shadow-lg"
     >
