@@ -295,7 +295,7 @@ export function ChannelWorkspace() {
       </div>
 
       {/* Sync progress bar — always visible when syncing */}
-      <div className="shrink-0">{id && <SyncProgress syncState={syncState} isSyncing={isSyncing} />}</div>
+      <div className="shrink-0">{id && <SyncProgress syncState={syncState} isSyncing={isSyncing} channelId={id} />}</div>
 
       {/* Content */}
       {loadingChannel ? (

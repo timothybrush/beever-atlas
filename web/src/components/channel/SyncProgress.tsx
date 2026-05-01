@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useExtractionStatus } from "@/hooks/useExtractionStatus";
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Brain, Users, GitBranch, XCircle, CheckCircle2, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SyncState } from "@/hooks/useSync";
@@ -120,6 +121,11 @@ function BatchResults({ results }: { results: BatchResultEntry[] }) {
 interface SyncProgressProps {
   syncState: SyncState;
   isSyncing: boolean;
+  /** When provided, the component polls /extraction-status for this channel
+   *  and renders an "Enriching X of Y messages" row when the background
+   *  worker still has pending or extracting rows after sync returned.
+   *  Pass undefined to disable. */
+  channelId?: string | null;
 }
 
 const PIPELINE_STAGES = [
@@ -153,13 +159,21 @@ function parseStage(stage: string | null | undefined) {
   return { step: 0, total: 0, label: stage };
 }
 
-export function SyncProgress({ syncState, isSyncing }: SyncProgressProps) {
+export function SyncProgress({ syncState, isSyncing, channelId }: SyncProgressProps) {
   const [showDetails, setShowDetails] = useState(true);
   const [detailTab, setDetailTab] = useState<"activity" | "batches">("activity");
 
-  const isFailed = syncState.state === "error";
+  // Background extraction status — populated when the worker is enabled
+  // (DECOUPLE_EXTRACTION=true) and rows are still being processed after sync
+  // returns. Polls every 5s while syncing, every 30s otherwise.
+  const extraction = useExtractionStatus(channelId, { isSyncing });
 
-  if (!isFailed && (!isSyncing || syncState.state !== "syncing")) {
+  const isFailed = syncState.state === "error";
+  const extractionInProgress =
+    extraction.status &&
+    (extraction.status.counts.pending > 0 || extraction.status.counts.extracting > 0);
+
+  if (!isFailed && (!isSyncing || syncState.state !== "syncing") && !extractionInProgress) {
     return null;
   }
 
@@ -232,6 +246,27 @@ export function SyncProgress({ syncState, isSyncing }: SyncProgressProps) {
             {parentMessages} messages · {pct}%
           </span>
         </div>
+
+        {/* Background-extraction progress: shown when the worker still has
+            pending or extracting rows. Replaces the wall-of-errors banner
+            with an honest "Enriching X of Y" status when the LLM pipeline
+            is the slow path (sync itself finished in seconds). */}
+        {extractionInProgress && extraction.status && (
+          <div className="rounded-md border border-sky-200 dark:border-sky-900/50 bg-sky-50/60 dark:bg-sky-950/20 px-3 py-1.5 mb-2.5 flex items-center gap-2">
+            <Loader2 size={12} className="animate-spin text-sky-600 dark:text-sky-400 shrink-0" />
+            <span className="text-[11px] text-sky-800 dark:text-sky-200">
+              Enriching:{" "}
+              <span className="font-semibold">{extraction.status.counts.done}</span>
+              {" of "}
+              <span className="font-semibold">{extraction.status.total}</span> messages complete
+              {extraction.status.counts.failed > 0 && (
+                <span className="ml-1.5 text-amber-700 dark:text-amber-400">
+                  ({extraction.status.counts.failed} retrying)
+                </span>
+              )}
+            </span>
+          </div>
+        )}
 
         {/* Error details — deduped so identical 503s collapse into one row */}
         {isFailed && (dedupedErrors.length > 0 || errors.length > 0) && (

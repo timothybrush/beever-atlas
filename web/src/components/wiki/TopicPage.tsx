@@ -1,11 +1,12 @@
 import { ChevronRight } from "lucide-react";
 import { WikiMarkdown } from "./WikiMarkdown";
 import { CitationPanel } from "./CitationPanel";
+import { TensionsSection, type WikiTension } from "./TensionsSection";
 import type { WikiPage } from "@/lib/types";
 import { wikiT } from "@/lib/wikiI18n";
 
 interface TopicPageProps {
-  page: WikiPage;
+  page: WikiPage & { tensions?: WikiTension[] };
   onNavigate: (pageId: string) => void;
   lang?: string;
 }
@@ -66,6 +67,10 @@ export function TopicPage({ page, onNavigate, lang }: TopicPageProps) {
       <div className="mt-6 max-w-none">
         <WikiMarkdown content={content} citations={page.citations} onNavigate={onNavigate} />
       </div>
+
+      {/* Inline contradictions detected between facts on this page. Renders
+          nothing when the page has no tensions, so the common case stays clean. */}
+      <TensionsSection tensions={page.tensions} />
 
       <CitationPanel citations={page.citations} />
     </div>

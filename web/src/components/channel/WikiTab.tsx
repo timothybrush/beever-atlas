@@ -10,6 +10,7 @@ import { useWikiVersions } from "@/hooks/useWikiVersions";
 import { useWikiVersion } from "@/hooks/useWikiVersion";
 import { useChannelMemoryCount } from "@/hooks/useChannelMemoryCount";
 import { WikiLayout } from "@/components/wiki/WikiLayout";
+import { WikiHealthToolbar } from "@/components/wiki/WikiHealthToolbar";
 import { OverviewPage } from "@/components/wiki/OverviewPage";
 import { TopicPage } from "@/components/wiki/TopicPage";
 import { GenericPage } from "@/components/wiki/GenericPage";
@@ -679,6 +680,7 @@ export function WikiTab() {
       currentLang={displayedLang}
       supportedLanguages={langConfig?.supported_languages ?? [targetLang]}
       onRegenerateInLang={handleSwitchLang}
+      headerExtra={<WikiHealthToolbar channelId={channelId!} manualMode={true} />}
     >
       <>
         {viewingVersionNumber !== null && versionData && (
