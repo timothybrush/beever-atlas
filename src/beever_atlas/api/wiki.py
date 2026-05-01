@@ -289,7 +289,7 @@ async def _run_generation(
 
 
 # ---------------------------------------------------------------------------
-# PR-G — Lint endpoint
+# Wiki health endpoints — lint + on-demand maintenance
 # ---------------------------------------------------------------------------
 
 
@@ -305,8 +305,7 @@ async def lint_wiki(
     Three deterministic checks (orphan / stale / duplicate-section)
     + one bounded LLM coherence pass per page (max 1 call per page).
     Returns ``{channel_id, target_lang, pages_scanned, findings}``.
-    Always 200 — an empty findings list is the healthy-channel
-    response per the spec.
+    Always 200 — an empty findings list is the healthy-channel response.
     """
     from beever_atlas.services.wiki_lint import lint_channel_wiki
     from beever_atlas.wiki.page_store import WikiPageStore
@@ -339,3 +338,41 @@ async def lint_wiki(
         llm_provider=None,  # Production wires LLMProvider here
     )
     return report.model_dump(mode="json")
+
+
+@router.post("/maintain")
+async def maintain_wiki(
+    channel_id: str,
+    target_lang: str | None = Query(default=None),
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Drain the dirty page queue for one channel.
+
+    Manual mode receiver for the "Maintain Wiki" button. The maintainer
+    reads pages where ``is_dirty=True`` and runs the per-page LLM
+    section-patch on each one, preserving title / slug / unaffected
+    sections byte-identical so page voice does not drift.
+
+    Returns ``{rewritten, errors}`` counters. Always 200 — a degraded
+    channel returns ``errors > 0`` rather than failing the request.
+    """
+    from beever_atlas.services.wiki_maintainer import get_wiki_maintainer
+
+    await assert_channel_access(principal, channel_id)
+    lang = await _resolve_target_lang(channel_id, target_lang)
+
+    maintainer = get_wiki_maintainer()
+    if maintainer is None:
+        # Maintainer not wired in this deployment — manual mode is the
+        # default but the singleton is initialised by the FastAPI lifespan.
+        # When PR-F's lifespan wiring lands, this branch falls away.
+        return {"rewritten": 0, "errors": 0, "reason": "maintainer_not_initialized"}
+
+    counters = await maintainer.maintain_now(channel_id, target_lang=lang)
+    logger.info(
+        "wiki_maintain channel=%s rewritten=%d errors=%d",
+        channel_id,
+        counters.get("rewritten", 0),
+        counters.get("errors", 0),
+    )
+    return counters
