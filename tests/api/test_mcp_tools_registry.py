@@ -34,6 +34,10 @@ EXPECTED_TOOLS = frozenset(
         "get_wiki_page",
         "get_recent_activity",
         "search_media_references",
+        # retrieval (production-wiring §14–§15)
+        "search_memory",
+        "lint_wiki",
+        "get_extraction_status",
         # graph
         "find_experts",
         "search_relationships",

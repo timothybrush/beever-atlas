@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field

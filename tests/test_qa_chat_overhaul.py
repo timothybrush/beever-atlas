@@ -67,6 +67,47 @@ class TestCitationExtraction:
         """Text without citations returns empty list."""
         assert self._extract("Hello world") == []
 
+    # -- production-wiring §16: wiki-page citation extension -------------
+
+    def test_wiki_page_citation_parsed(self):
+        """``[N] Wiki Page: <slug> | Section: <id>`` parses with type=wiki_page."""
+        text = "Per the auth page [3], we use OIDC. [3] Wiki Page: topic:auth | Section: decisions"
+        citations = self._extract(text)
+        # The literal "[3]" earlier is just text, not a citation per se;
+        # the regex requires "Wiki Page:" or "Author:" to follow.
+        assert any(c.get("type") == "wiki_page" for c in citations)
+        wiki = [c for c in citations if c.get("type") == "wiki_page"][0]
+        assert wiki["number"] == "3"
+        assert wiki["page_id"] == "topic:auth"
+        assert wiki["section_id"] == "decisions"
+
+    def test_channel_fact_citation_unchanged(self):
+        """The original channel-fact regex still works (no regression)."""
+        text = "[1] Author: @Alice | Channel: #foo | Time: 2026-01-01"
+        citations = self._extract(text)
+        assert len(citations) == 1
+        assert citations[0]["type"] == "channel_fact"
+        assert citations[0]["author"] == "@Alice"
+
+    def test_mixed_wiki_and_channel_citations_both_parse(self):
+        """An answer with one of each citation kind yields both."""
+        text = (
+            "Per [1] Author: @Alice | Channel: #foo | Time: 2026-01-01, "
+            "we use OIDC; see [2] Wiki Page: topic:auth | Section: overview"
+        )
+        citations = self._extract(text)
+        types = sorted(c["type"] for c in citations)
+        assert types == ["channel_fact", "wiki_page"]
+
+    def test_wiki_page_without_section(self):
+        """Section is optional; page_id alone still parses."""
+        text = "[1] Wiki Page: topic:auth"
+        citations = self._extract(text)
+        assert len(citations) == 1
+        assert citations[0]["type"] == "wiki_page"
+        assert citations[0]["page_id"] == "topic:auth"
+        assert citations[0]["section_id"] == ""
+
 
 # ── Test 16.5: Answer mode request model ────────────────────────────────────
 

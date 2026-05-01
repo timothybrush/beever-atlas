@@ -353,3 +353,262 @@ def register_retrieval_tools(mcp: FastMCP) -> None:
                 channel_id,
             )
             return {"media": []}
+
+    # -- search_memory ------------------------------------------------------
+    @mcp.tool(name="search_memory")
+    async def search_memory(
+        query: Annotated[str, "Natural-language or keyword search query"],
+        ctx: Context,
+        scope: Annotated[
+            str,
+            "Either 'all' (default — search every channel the principal can access) "
+            "or 'channel:<channel_id>' (search a single channel)",
+        ] = "all",
+        limit: Annotated[int, "Maximum hits across all channels (1–50)"] = 20,
+    ) -> dict:
+        """Cross-channel agent recall via Weaviate hybrid search.
+
+        Use this when the agent does not yet know which channel holds the
+        relevant memory — it merges hybrid (BM25 + vector) results from
+        every channel the principal can access. Each hit carries
+        ``fact_id``, ``text``, ``score``, ``channel_id``, ``cluster_id``,
+        ``entity_tags``. Results are ranked by hybrid score across the
+        merged set.
+
+        scope:
+          - ``"all"``: enumerate the principal's accessible channels and
+            search each (auth-gated per channel). Use this when the agent
+            does not yet know which channel holds the relevant memory.
+          - ``"channel:<id>"``: single-channel search, equivalent to
+            ``search_channel_facts`` but with the standard search_memory
+            response shape.
+
+        Returns: ``{hits: [...], query: <echo>}`` or
+        ``{error: "channel_access_denied", channel_id: ...}`` for an
+        explicit unreachable channel scope.
+        """
+        principal_id = _get_principal_id(ctx)
+        if not principal_id:
+            return {"error": "authentication_missing"}
+
+        if not query or len(query) > 4000:
+            return {
+                "error": "invalid_parameter",
+                "parameter": "query",
+                "detail": "length must be 1..4000 characters",
+            }
+
+        # Clamp limit so a misbehaving caller cannot drain the whole
+        # corpus through one call.
+        limit = max(1, min(limit, 50))
+
+        # Resolve scope → list of channel_ids to search.
+        target_channels: list[str] = []
+        if scope == "all":
+            try:
+                from beever_atlas.capabilities import connections as conn_cap
+                from beever_atlas.stores import get_stores
+
+                stores = get_stores()
+                connections = await stores.platform.list_connections()
+                visible_ids: set[str] = set()
+                # Mirror ``connections.list_connections`` ownership semantics
+                # so search_memory does not accidentally peek at other-tenant
+                # channels: re-use the public capability rather than
+                # re-implementing the rule.
+                visible_conns = await conn_cap.list_connections(principal_id)
+                visible_conn_ids = {row["connection_id"] for row in visible_conns}
+                for conn in connections:
+                    if conn.id not in visible_conn_ids:
+                        continue
+                    for cid in conn.selected_channels or []:
+                        visible_ids.add(cid)
+                target_channels = sorted(visible_ids)
+            except Exception:
+                logger.exception(
+                    "search_memory: failed to enumerate channels for principal=%s",
+                    principal_id,
+                )
+                return {"hits": [], "query": query}
+        elif scope.startswith("channel:"):
+            target_channels = [scope.split(":", 1)[1]]
+        else:
+            return {
+                "error": "invalid_parameter",
+                "parameter": "scope",
+                "detail": "must be 'all' or 'channel:<id>'",
+            }
+
+        if not target_channels:
+            return {"hits": [], "query": query}
+
+        # Per-channel auth + hybrid search. We collect raw hits across
+        # channels then re-rank by score before truncating to ``limit``.
+        from beever_atlas.capabilities import memory as mem_cap
+        from beever_atlas.capabilities.errors import ChannelAccessDenied
+
+        explicit_scope = scope.startswith("channel:")
+        merged: list[dict] = []
+        per_channel_limit = max(5, limit)
+        for cid in target_channels:
+            try:
+                facts = await mem_cap.search_channel_facts(
+                    principal_id,
+                    cid,
+                    query,
+                    time_scope="any",
+                    limit=per_channel_limit,
+                )
+            except ChannelAccessDenied:
+                if explicit_scope:
+                    return {
+                        "error": "channel_access_denied",
+                        "channel_id": cid,
+                    }
+                continue
+            except Exception:
+                logger.warning("search_memory: per-channel search failed channel=%s", cid)
+                continue
+            for fact in facts:
+                merged.append(
+                    {
+                        "fact_id": fact.get("fact_id") or fact.get("id"),
+                        "text": fact.get("text") or fact.get("memory_text", ""),
+                        "score": float(fact.get("score") or fact.get("confidence") or 0.0),
+                        "channel_id": cid,
+                        "cluster_id": fact.get("cluster_id"),
+                        "entity_tags": list(fact.get("entity_tags") or []),
+                    }
+                )
+
+        merged.sort(key=lambda h: h["score"], reverse=True)
+        return {"hits": merged[:limit], "query": query}
+
+    # -- lint_wiki ----------------------------------------------------------
+    @mcp.tool(name="lint_wiki")
+    async def lint_wiki(
+        channel_id: Annotated[str, "The channel id whose wiki should be linted"],
+        ctx: Context,
+        target_lang: Annotated[
+            str | None,
+            "Language tag to lint (defaults to the channel's primary)",
+        ] = None,
+        run_coherence_check: Annotated[
+            bool,
+            "Run the bounded LLM coherence pass (one call per page)",
+        ] = True,
+    ) -> dict:
+        """Run the wiki lint checks for a channel and return findings.
+
+        Wraps the same ``POST /api/channels/{id}/wiki/lint`` HTTP endpoint
+        used by the WikiHealthToolbar UI. Surfaces orphan pages, stale
+        sections, duplicate sections, and intra-page coherence issues.
+        Each finding carries ``severity``, ``category``, ``page_id``,
+        ``section_id``, ``message``, and ``suggested_action``.
+
+        Returns: ``{findings: [...], pages_scanned: N}`` or
+        ``{error: "channel_access_denied", ...}``.
+        """
+        principal_id = _get_principal_id(ctx)
+        if not principal_id:
+            return {"error": "authentication_missing"}
+
+        err = _validate_id(channel_id, "channel_id")
+        if err:
+            return err
+
+        try:
+            from beever_atlas.infra.channel_access import assert_channel_access
+            from beever_atlas.services.wiki_lint import lint_channel_wiki
+            from beever_atlas.stores import get_stores
+            from beever_atlas.wiki.page_store import WikiPageStore
+
+            await assert_channel_access(principal_id, channel_id)
+
+            stores = get_stores()
+            page_store = WikiPageStore(db=stores.mongodb.db)
+            # Live cluster ids — orphan detection compares against the
+            # channel's current TopicCluster set in Weaviate. Mirrors the
+            # setup in api/wiki.py::lint_wiki so the MCP and HTTP paths
+            # produce identical findings.
+            live_cluster_ids: set[str] = set()
+            try:
+                clusters = await stores.weaviate.list_clusters(channel_id)
+                live_cluster_ids = {str(getattr(c, "id", "") or "") for c in clusters}
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "lint_wiki MCP: live-cluster enumeration failed channel=%s — "
+                    "orphan detection will skip",
+                    channel_id,
+                )
+
+            report = await lint_channel_wiki(
+                channel_id=channel_id,
+                page_store=page_store,
+                target_lang=target_lang or "en",
+                live_cluster_ids=live_cluster_ids,
+                run_coherence_check=run_coherence_check,
+                llm_provider=None,
+            )
+            return report.model_dump(mode="json")
+        except Exception as exc:
+            # ``assert_channel_access`` raises a ``HTTPException(403)``
+            # under-the-hood; surface that as channel_access_denied. Other
+            # exceptions are swallowed with a structured log.
+            from fastapi import HTTPException
+
+            if isinstance(exc, HTTPException) and exc.status_code in (401, 403):
+                return {"error": "channel_access_denied", "channel_id": channel_id}
+            logger.exception(
+                "lint_wiki: failed principal=%s channel_id=%s",
+                principal_id,
+                channel_id,
+            )
+            return {"findings": [], "error": "lint_failed"}
+
+    # -- get_extraction_status ---------------------------------------------
+    @mcp.tool(name="get_extraction_status")
+    async def get_extraction_status(
+        channel_id: Annotated[str, "The channel id whose extraction queue depth to return"],
+        ctx: Context,
+    ) -> dict:
+        """Return per-status extraction counts for a channel.
+
+        Backs operator + agent visibility into the background
+        ExtractionWorker queue. Wraps the same ``GET
+        /api/channels/{id}/extraction-status`` HTTP endpoint used by the
+        Sync Progress + WikiTab UIs. Returns
+        ``{channel_id, counts: {pending, extracting, done, failed}, total}``.
+        """
+        principal_id = _get_principal_id(ctx)
+        if not principal_id:
+            return {"error": "authentication_missing"}
+
+        err = _validate_id(channel_id, "channel_id")
+        if err:
+            return err
+
+        try:
+            from beever_atlas.infra.channel_access import assert_channel_access
+            from beever_atlas.stores import get_stores
+
+            await assert_channel_access(principal_id, channel_id)
+            stores = get_stores()
+            counts = await stores.mongodb.count_channel_messages_by_status(channel_id)
+            total = sum(counts.values())
+            return {
+                "channel_id": channel_id,
+                "counts": counts,
+                "total": total,
+            }
+        except Exception as exc:
+            from fastapi import HTTPException
+
+            if isinstance(exc, HTTPException) and exc.status_code in (401, 403):
+                return {"error": "channel_access_denied", "channel_id": channel_id}
+            logger.exception(
+                "get_extraction_status: failed principal=%s channel_id=%s",
+                principal_id,
+                channel_id,
+            )
+            return {"error": "extraction_status_failed"}

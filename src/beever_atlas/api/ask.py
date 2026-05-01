@@ -78,13 +78,50 @@ def _sse_event(event_type: str, data: dict) -> str:
 def _extract_citations_from_text(text: str) -> list[dict]:
     """Extract citation-format lines from agent response text.
 
-    Looks for lines like: [1] Author: @handle | Channel: #name | Time: ts
-    Returns list of citation dicts for the SSE citations event.
+    Recognises two citation shapes:
+
+    1. ``channel_fact``: ``[N] Author: @handle | Channel: #name | Time: ts``
+       — the historical chat-message citation.
+    2. ``wiki_page``: ``[N] Wiki Page: <slug> | Section: <id>`` — the new
+       per-page wiki citation introduced by the production-wiring
+       redesign so wiki-content answers can carry a navigable reference.
+
+    Mixed citations within one answer are supported; the returned list
+    preserves textual order. Channel-fact citations that include the
+    literal substring ``"Wiki Page:"`` would otherwise misclassify, so we
+    match wiki-page citations FIRST and mask their spans before scanning
+    for channel-fact citations.
     """
-    citations = []
+    citations: list[dict] = []
+    consumed: list[tuple[int, int]] = []
+    for match in re.finditer(
+        r"\[(\d+)\]\s+Wiki Page:\s*([^|]+)\|?\s*(?:Section:\s*([^\[\n]+))?",
+        text,
+    ):
+        citations.append(
+            {
+                "type": "wiki_page",
+                "text": match.group(0).strip(),
+                "number": match.group(1),
+                "page_id": match.group(2).strip() if match.group(2) else "",
+                "section_id": match.group(3).strip() if match.group(3) else "",
+            }
+        )
+        consumed.append(match.span())
+
+    # Mask out wiki-page matches so the channel-fact regex can't double-match.
+    if consumed:
+        chars = list(text)
+        for start, end in consumed:
+            for i in range(start, end):
+                chars[i] = " "
+        scrubbed = "".join(chars)
+    else:
+        scrubbed = text
+
     for match in re.finditer(
         r"\[(\d+)\]\s+Author:\s*([^|]+)\|?\s*(?:Channel:\s*([^|]+)\|?)?\s*(?:Time:\s*([^\[]+))?",
-        text,
+        scrubbed,
     ):
         citations.append(
             {
