@@ -220,41 +220,39 @@ class SyncScheduler:
         """Register the global ExtractionWorker tick + sweep jobs.
 
         The worker is process-wide (one instance, not per-channel) — its
-        atomic ``find_one_and_update`` claim is the safety primitive that
-        lets multiple worker replicas (future) drain the same queue
-        without double-processing. ``tick`` runs every
-        ``extraction_worker_tick_seconds`` (default 30s), ``sweep_stale``
-        every 5min. Both jobs short-circuit when there's no work, so the
-        Mongo cost when the queue is idle is one cheap index probe per
-        tick.
+        atomic ``find_one_and_update`` claim is the safety primitive
+        that lets multiple worker replicas (future) drain the same
+        queue without double-processing. ``tick`` runs every
+        ``_TICK_SECONDS`` (30s), ``sweep_stale`` every half the
+        ``_STALE_SECONDS`` window. Both jobs short-circuit when there's
+        no work, so the Mongo cost when the queue is idle is one cheap
+        index probe per tick.
+
+        Tuning constants (`_TICK_SECONDS`, `_STALE_SECONDS`) live in
+        ``services/extraction_worker.py``, not in env vars — capacity
+        planning belongs in code-review-able PRs, not in `.env`.
         """
-        from beever_atlas.infra.config import get_settings
         from beever_atlas.services.extraction_worker import (
+            _STALE_SECONDS,
+            _TICK_SECONDS,
             ExtractionWorker,
             init_extraction_worker,
         )
 
-        settings = get_settings()
-        worker = ExtractionWorker(
-            stale_seconds=settings.extraction_worker_stale_seconds,
-        )
+        worker = ExtractionWorker(stale_seconds=_STALE_SECONDS)
         init_extraction_worker(worker)
 
         await self._scheduler.add_schedule(
             self._extraction_tick,
-            IntervalTrigger(seconds=settings.extraction_worker_tick_seconds),
+            IntervalTrigger(seconds=_TICK_SECONDS),
             id="extraction:tick",
             max_running_jobs=1,
             conflict_policy="do_nothing",
         )
-        # Code-review fix: derive sweep interval from stale_seconds so a
-        # tight ``EXTRACTION_WORKER_STALE_SECONDS`` does not leave rows
-        # orphaned for longer than necessary. Worst-case orphan window is
-        # roughly ``sweep_interval + stale_seconds``; halving the stale
-        # window keeps the worst case proportional to the configured
-        # tolerance. Floor at 60s so we don't hammer Mongo on a
+        # Sweep interval is derived from the stale window so they stay
+        # in proportion. Floor at 60s so we don't hammer Mongo on a
         # mis-configured tiny stale window.
-        sweep_interval = max(60, settings.extraction_worker_stale_seconds // 2)
+        sweep_interval = max(60, _STALE_SECONDS // 2)
         await self._scheduler.add_schedule(
             self._extraction_sweep,
             IntervalTrigger(seconds=sweep_interval),
@@ -264,9 +262,9 @@ class SyncScheduler:
         )
         logger.info(
             "SyncScheduler: ExtractionWorker registered tick=%ds sweep=%ds stale=%ds",
-            settings.extraction_worker_tick_seconds,
+            _TICK_SECONDS,
             sweep_interval,
-            settings.extraction_worker_stale_seconds,
+            _STALE_SECONDS,
         )
 
     async def _extraction_tick(self) -> None:

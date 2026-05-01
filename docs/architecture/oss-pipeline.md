@@ -60,6 +60,27 @@ All flags default OFF so the branch is safe to merge to `main` without
 behavior change. Production rollout flips the flags in the order above
 per the runbook in `tasks.md` section 2g.1.
 
+### Operator-flippable env vars (6)
+
+The redesign exposes exactly **six** env vars to operators — every other
+tuning value lives as a module constant in code. The principle: an env
+var exists iff a non-developer would change it without recompiling
+during incident response or a planned rollout.
+
+| Env var | Purpose | Owner module |
+|---|---|---|
+| `READ_FROM_MESSAGE_STORE` | Chat-platform read-path kill switch | `api/channels.py` |
+| `READ_FILE_IMPORTS_FROM_CHANNEL_MESSAGES` | File-import read-path kill switch (kept separate for granular rollback) | `api/channels.py` |
+| `WRITE_DUAL_FILE_IMPORTS` | Temporary dual-write safety net (deleted after rollout) | `api/imports.py` |
+| `DECOUPLE_EXTRACTION` | Sync→Worker primary lever | `services/sync_runner.py` |
+| `PER_PAGE_WIKI` | Wiki schema migration kill switch | `wiki/cache.py` |
+| `WIKI_MAINTENANCE_MODE` | Manual vs auto wiki maintenance (default `"manual"`) | `services/wiki_maintainer.py` |
+
+Tuning constants that are NOT env vars (and where to find them):
+- Worker tick / stale / max-retries: `services/extraction_worker.py:_TICK_SECONDS`, `_STALE_SECONDS`, `_MAX_RETRIES`
+- Circuit breaker cooldown: `services/circuit_breaker.py:_DEFAULT_COOLDOWN_SECONDS`
+- LLM failover enablement + map: `llm/provider.py:_FAILOVER_ENABLED`, `_FALLBACK_MAP` (out of OSS scope; enterprise tier flips in code)
+
 ## Data flow (with all flags ON)
 
 ```

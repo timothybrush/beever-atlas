@@ -92,20 +92,36 @@ def _doc_to_normalized_message(doc: dict[str, Any]) -> NormalizedMessage | None:
         return None
 
 
-def _retry_backoff_seconds(attempt_count: int) -> int:
-    """Exponential backoff schedule for failed-row retries.
+_RETRY_BACKOFF_SCHEDULE: list[int] = [30, 60, 120, 240, 480]
+"""Exponential backoff per attempt (seconds). Capped at the tail
+for attempts beyond the schedule. Combined with ``_MAX_RETRIES``,
+gives the system ~17 minutes of soft retries before a row stays
+``failed`` permanently."""
 
-    Spec D6 / PR-C tasks: ``[30, 60, 120, 240, 480]`` seconds capped at
-    ``480`` for attempts beyond the schedule. Worker reads this when
-    transitioning a row to ``failed`` so PR-C's auto-retry path picks it
-    up at the right time.
+_MAX_RETRIES: int = len(_RETRY_BACKOFF_SCHEDULE)
+"""Max retry attempts before a failed row stays failed permanently.
+Tied to the backoff schedule length so the two cannot drift."""
+
+_TICK_SECONDS: int = 30
+"""Default scheduler tick interval. Operators don't tune this — if
+30s is wrong for some deployment, change it here and redeploy."""
+
+_STALE_SECONDS: int = 600
+"""Stale-extracting recovery threshold. A row stuck in ``extracting``
+longer than this is reset to ``pending`` (worker crash recovery).
+10 min is conservative — extraction batches typically take 30-90s."""
+
+
+def _retry_backoff_seconds(attempt_count: int) -> int:
+    """Look up the backoff seconds for a given attempt count.
+
+    Spec D6 / PR-C: monotonic exponential schedule capped at the tail.
     """
-    schedule = [30, 60, 120, 240, 480]
     if attempt_count <= 0:
-        return schedule[0]
-    if attempt_count - 1 < len(schedule):
-        return schedule[attempt_count - 1]
-    return schedule[-1]
+        return _RETRY_BACKOFF_SCHEDULE[0]
+    if attempt_count - 1 < len(_RETRY_BACKOFF_SCHEDULE):
+        return _RETRY_BACKOFF_SCHEDULE[attempt_count - 1]
+    return _RETRY_BACKOFF_SCHEDULE[-1]
 
 
 class ExtractionWorker:
@@ -208,7 +224,7 @@ class ExtractionWorker:
             batch_size=claim_size,
             channel_id=channel_id,
             settle_seconds=self._settle_seconds,
-            max_retries=getattr(settings, "extraction_worker_max_retries", 5),
+            max_retries=_MAX_RETRIES,
         )
         counters = {"claimed": len(claimed), "succeeded": 0, "failed": 0, "channels": 0}
         if not claimed:

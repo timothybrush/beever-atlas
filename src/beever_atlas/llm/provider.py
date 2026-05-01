@@ -26,6 +26,14 @@ _MODEL_ALIASES: dict[str, str] = {
 # Ollama fallback model when local service is unreachable
 _OLLAMA_FALLBACK = "gemini-2.5-flash-lite"
 
+# PR-C provider failover — out of OSS scope per the architecture doc.
+# Hardcoded to disabled. Enterprise tier flips ``_FAILOVER_ENABLED`` to
+# True and populates ``_FALLBACK_MAP`` with their multi-provider routing
+# (e.g. ``"gemini-2.5-pro": "claude-3-5-sonnet"``). The map shape uses
+# string keys so model resolution stays plumbing-free.
+_FAILOVER_ENABLED: bool = False
+_FALLBACK_MAP: dict[str, str] = {}
+
 
 class LLMProvider:
     def __init__(self, settings: Settings):
@@ -61,13 +69,12 @@ class LLMProvider:
         Priority: MongoDB override → default map → LLM_FAST_MODEL env var.
         Returns a string (Gemini) or LiteLlm instance (Ollama).
 
-        PR-C: when the global CircuitBreaker is open AND
-        ``LLM_FAILOVER_ENABLED`` is True, the resolved model is
-        re-mapped through ``llm_fallback_model_map`` so a subsequent
-        call uses a smaller / different model while the primary
-        recovers. Facts written along this path are tagged
-        ``extracted_by_fallback=true`` (handled by the persister, not
-        here — this method is the seam, not the propagator).
+        PR-C provider failover seam: when ``_FAILOVER_ENABLED=True`` AND
+        the global CircuitBreaker is open AND the resolved model has a
+        ``_FALLBACK_MAP`` entry, the call is re-mapped to the fallback
+        model. Out of OSS scope by default — enterprise enablement flips
+        the module constants in code (NO env var since failover requires
+        multi-provider key management OSS doesn't ship).
         """
         # 1. Check MongoDB overrides
         model_str = self._agent_overrides.get(agent_name)
@@ -81,14 +88,20 @@ class LLMProvider:
         model_str = self._resolve_alias(model_str, f"agent={agent_name}")
 
         # PR-C: provider failover seam.
-        if getattr(self._settings, "llm_failover_enabled", False):
+        # Out of OSS scope per docs/architecture/oss-pipeline.md — multi-
+        # provider failover requires a second-provider key (Claude /
+        # OpenAI) which OSS doesn't ship. The seam is preserved as code
+        # so an enterprise tier can flip ``_FAILOVER_ENABLED = True`` and
+        # populate ``_FALLBACK_MAP`` with cross-provider entries. NO env
+        # var — operators don't get a half-wired feature they can't
+        # actually use.
+        if _FAILOVER_ENABLED and _FALLBACK_MAP:
             try:
                 from beever_atlas.services.circuit_breaker import get_circuit_breaker
 
                 breaker = get_circuit_breaker()
                 if breaker.is_open():
-                    fallback_map = getattr(self._settings, "llm_fallback_model_map", {})
-                    fallback = fallback_map.get(model_str)
+                    fallback = _FALLBACK_MAP.get(model_str)
                     if fallback:
                         logger.warning(
                             "LLMProvider: breaker open — failing over agent=%s "

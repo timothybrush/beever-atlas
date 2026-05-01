@@ -34,6 +34,15 @@ logger = logging.getLogger(__name__)
 BreakerState = Literal["closed", "open", "half_open"]
 
 
+_DEFAULT_COOLDOWN_SECONDS: int = 60
+"""Default cooldown before an open breaker probes via half-open.
+60s gives Gemini time to recover from a quota / outage spike without
+re-flooding it the moment a probe succeeds. Hardcoded — operators
+who need to tune this should change the constant here. The
+``LLM_OUTAGE_BREAKER_THRESHOLD`` env var (already in `.env.example`)
+is the operator-facing knob for breaker sensitivity."""
+
+
 @dataclass
 class CircuitBreakerSnapshot:
     """Read-only snapshot of breaker state for observability endpoints."""
@@ -238,7 +247,7 @@ def get_circuit_breaker() -> CircuitBreaker:
         settings = get_settings()
         _breaker_instance = CircuitBreaker(
             threshold=settings.llm_outage_breaker_threshold,
-            cooldown_seconds=getattr(settings, "llm_outage_breaker_cooldown_seconds", 60),
+            cooldown_seconds=_DEFAULT_COOLDOWN_SECONDS,
         )
     return _breaker_instance
 

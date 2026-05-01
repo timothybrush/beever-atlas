@@ -461,60 +461,14 @@ class Settings(BaseSettings):
     # worker idles harmlessly with no rows to claim.
     decouple_extraction: bool = Field(default=False, alias="DECOUPLE_EXTRACTION")
 
-    # Background extraction worker tick interval (seconds). 30s is the
-    # spec default; lower values increase responsiveness at the cost of
-    # more empty-claim Mongo round-trips when the queue is idle.
-    extraction_worker_tick_seconds: int = Field(
-        default=30, ge=5, le=600, alias="EXTRACTION_WORKER_TICK_SECONDS"
-    )
-
-    # Stale-extracting recovery sweep interval (seconds). Resets rows
-    # stuck in "extracting" longer than this window back to "pending".
-    # Conservative default (10 min) — extraction batches typically
-    # complete in 30-90 seconds.
-    extraction_worker_stale_seconds: int = Field(
-        default=600, ge=60, le=3600, alias="EXTRACTION_WORKER_STALE_SECONDS"
-    )
-
-    # OSS pipeline + wiki redesign — PR-C circuit breaker.
-    # Cooldown (seconds) before an open breaker probes via half-open.
-    # 60s gives Gemini time to recover from a quota / outage spike
-    # without re-flooding it the moment a probe succeeds.
-    llm_outage_breaker_cooldown_seconds: int = Field(
-        default=60, ge=5, le=600, alias="LLM_OUTAGE_BREAKER_COOLDOWN_SECONDS"
-    )
-
-    # OSS pipeline + wiki redesign — PR-C provider failover seam.
-    # When True AND the breaker is open, ``LLMProvider.resolve_model``
-    # returns the configured fallback model instead of the primary.
-    # Default OFF — the failover wiring is built but unused until
-    # multi-provider key management is in scope. Facts written under
-    # fallback are tagged ``extracted_by_fallback=true`` for audit.
-    llm_failover_enabled: bool = Field(default=False, alias="LLM_FAILOVER_ENABLED")
-
-    # Mapping of primary → fallback model strings consulted when the
-    # breaker is open AND ``llm_failover_enabled`` is True. Default
-    # routes Gemini Pro → Gemini Flash Lite (same provider, smaller
-    # variant) — a conservative fallback that doesn't require a second
-    # provider key. Add entries here to wire Claude / OpenAI fallbacks
-    # later without code changes.
-    llm_fallback_model_map: dict[str, str] = Field(
-        default_factory=lambda: {
-            "gemini-2.5-pro": "gemini-2.5-flash-lite",
-            "gemini-2.5-flash": "gemini-2.5-flash-lite",
-        },
-        alias="LLM_FALLBACK_MODEL_MAP",
-    )
-
-    # PR-C: maximum retry attempts for failed extraction rows. The
-    # worker re-claims ``failed`` rows whose ``attempt_count`` is below
-    # this cap. Combined with the content-hash deterministic fact ID
-    # (PR-B.1) and exponential backoff [30,60,120,240,480]s, this gives
-    # the system ~17 minutes of soft retries before a row is considered
-    # permanently failed. Default 5 matches the backoff schedule length.
-    extraction_worker_max_retries: int = Field(
-        default=5, ge=1, le=20, alias="EXTRACTION_WORKER_MAX_RETRIES"
-    )
+    # Tuning knobs (worker tick interval, stale-recovery window, max
+    # retries, breaker cooldown, LLM failover enablement, fallback
+    # model map) intentionally NOT env-configurable. They live as
+    # module constants near the code that uses them
+    # (``services/extraction_worker.py``, ``services/circuit_breaker.py``,
+    # ``llm/provider.py``). Operator-tunable env vars are reserved for
+    # behavior that an on-call would actually flip during an incident
+    # — capacity planning belongs in code-review-able PRs.
 
     # OSS pipeline + wiki redesign — PR-E per-page wiki page-store.
     # When True, ``WikiCache.get_page`` reads from the new
