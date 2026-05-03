@@ -10,6 +10,7 @@ import { useWikiRefresh, type WikiGenerationStatus } from "@/hooks/useWikiRefres
 import { useWikiVersions } from "@/hooks/useWikiVersions";
 import { useWikiVersion } from "@/hooks/useWikiVersion";
 import { useChannelMemoryCount } from "@/hooks/useChannelMemoryCount";
+import { useChannelPolicy } from "@/hooks/useChannelPolicy";
 import { WikiLayout } from "@/components/wiki/WikiLayout";
 import { WikiHealthToolbar } from "@/components/wiki/WikiHealthToolbar";
 import { OverviewPage } from "@/components/wiki/OverviewPage";
@@ -18,7 +19,7 @@ import { GenericPage } from "@/components/wiki/GenericPage";
 import { FaqPage } from "@/components/wiki/FaqPage";
 import { WikiRegenerateButton } from "@/components/channel/WikiRegenerateButton";
 import { Button } from "@/components/ui/button";
-import { api } from "@/lib/api";
+import { api, authFetch, API_BASE } from "@/lib/api";
 import type { WikiPage, WikiPageNode } from "@/lib/types";
 
 interface LanguageConfig {
@@ -413,6 +414,7 @@ export function WikiTab() {
   const navigate = useNavigate();
   const [activePageId, setActivePageId] = useState<string>("overview");
   const [viewingVersionNumber, setViewingVersionNumber] = useState<number | null>(null);
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
 
   const [langConfig, setLangConfig] = useState<LanguageConfig | null>(null);
   const [targetLang, setTargetLang] = useState<string>(() => {
@@ -436,6 +438,14 @@ export function WikiTab() {
   const { data: wiki, isLoading, error, isNotFound, refetch } = useWiki(channelId, targetLang);
   const { hasMemories, isLoading: isMemoryCountLoading } = useChannelMemoryCount(channelId);
 
+  // Derive manual mode from the effective channel policy.
+  // When maintenance_mode is "auto" the toolbar button is hidden (auto fires on its own).
+  // Default to true (manual) so the button is visible when the policy hasn't loaded yet.
+  const { policy: channelPolicy } = useChannelPolicy(channelId);
+  const manualMode = channelPolicy
+    ? channelPolicy.effective.wiki.maintenance_mode !== "auto"
+    : true;
+
   // Version history
   const { data: versions, isLoading: isVersionsLoading, refetch: refetchVersions } = useWikiVersions(channelId);
   const { data: versionData, isLoading: isVersionLoading } = useWikiVersion(
@@ -445,7 +455,7 @@ export function WikiTab() {
 
   // Only fetch non-overview pages lazily (when not viewing a version)
   const lazyPageId = viewingVersionNumber === null && activePageId !== "overview" ? activePageId : undefined;
-  const { data: pageData, isLoading: isPageLoading } = useWikiPage(channelId, lazyPageId, targetLang);
+  const { data: pageData, isLoading: isPageLoading, isRevalidating: isPageRevalidating } = useWikiPage(channelId, lazyPageId, targetLang);
 
   const {
     mutate: triggerRefresh,
@@ -542,6 +552,28 @@ export function WikiTab() {
     setViewingVersionNumber(null);
     setActivePageId("overview");
   }, []);
+
+  const handleDownload = useCallback(async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/api/channels/${channelId}/wiki/download`);
+      if (!res.ok) {
+        alert(`Download failed (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("Content-Disposition") || "";
+      const nameMatch = disposition.match(/filename[^;=\n]*=["']?([^"';\n]+)/);
+      const filename = nameMatch ? nameMatch[1].trim() : `${channelId}-wiki.md`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      alert("Download failed. Please try again.");
+    }
+  }, [channelId]);
 
   if (isLoading) {
     return <WikiLoadingSkeleton />;
@@ -669,7 +701,16 @@ export function WikiTab() {
       </div>
     );
   } else {
-    pageContent = renderPage(activePage, topicPages, handleNavigate, displayedLang);
+    // Wrap in a div that fades slightly during background revalidation so the
+    // user perceives a smooth update rather than a hard flash when the poll
+    // returns a changed version.
+    pageContent = (
+      <div
+        className={`transition-opacity duration-150 ${isPageRevalidating ? "opacity-60" : "opacity-100"}`}
+      >
+        {renderPage(activePage, topicPages, handleNavigate, displayedLang)}
+      </div>
+    );
   }
 
   return (
@@ -689,7 +730,20 @@ export function WikiTab() {
       currentLang={displayedLang}
       supportedLanguages={langConfig?.supported_languages ?? [targetLang]}
       onRegenerateInLang={handleSwitchLang}
-      headerExtra={<WikiHealthToolbar channelId={channelId!} manualMode={true} />}
+      versionHistoryOpen={versionHistoryOpen}
+      onVersionHistoryToggle={() => setVersionHistoryOpen((v) => !v)}
+      headerExtra={
+        <WikiHealthToolbar
+          channelId={channelId!}
+          manualMode={manualMode}
+          onDownload={handleDownload}
+          onHistoryToggle={() => setVersionHistoryOpen((v) => !v)}
+          historyOpen={versionHistoryOpen}
+          versionCount={wiki?.version_count ?? 0}
+          onRegenerate={handleRefresh}
+          isRegenerating={isRefreshing}
+        />
+      }
     >
       <>
         {viewingVersionNumber !== null && versionData && (

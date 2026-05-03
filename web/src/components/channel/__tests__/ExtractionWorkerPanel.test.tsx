@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 
 // Stub the admin token before any component import so the hook reads it.
 vi.stubEnv("VITE_BEEVER_ADMIN_TOKEN", "test-admin-token");

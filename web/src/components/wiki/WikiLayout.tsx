@@ -1,5 +1,5 @@
 import { type ReactNode, useState, useCallback, useRef, useEffect } from "react";
-import { Download, Search, X, ChevronUp, ChevronDown, History, Menu } from "lucide-react";
+import { Search, X, ChevronUp, ChevronDown, Menu } from "lucide-react";
 import { WikiSidebar } from "./WikiSidebar";
 import { WikiBreadcrumb } from "./WikiBreadcrumb";
 import { FreshnessBadge } from "./FreshnessBadge";
@@ -8,7 +8,6 @@ import { VersionHistoryPanel } from "./VersionHistoryPanel";
 import { WikiRegenerateButton } from "@/components/channel/WikiRegenerateButton";
 import type { WikiStructure, WikiPage, WikiVersionSummary } from "@/lib/types";
 import { wikiT } from "@/lib/wikiI18n";
-import { authFetch, API_BASE } from "@/lib/api";
 
 interface WikiLayoutProps {
   channelId: string;
@@ -32,6 +31,13 @@ interface WikiLayoutProps {
   supportedLanguages?: string[];
   /** Called when the user picks a different language from the regenerate menu. */
   onRegenerateInLang?: (lang: string) => void;
+  /**
+   * Controlled open state for the version history panel.
+   * When provided, the layout uses this value instead of its own internal state.
+   */
+  versionHistoryOpen?: boolean;
+  /** Called when the user requests to toggle the version history panel. */
+  onVersionHistoryToggle?: () => void;
 }
 
 const MIN_WIDTH = 180;
@@ -233,14 +239,17 @@ function WikiContentSearch({ contentRef, lang }: WikiContentSearchProps) {
 }
 
 export function WikiLayout({
-  channelId,
+  // ``channelId`` and ``versionCount`` remain in ``WikiLayoutProps`` for
+  // callers (the parent passes them and we want a stable prop API), but
+  // the layout no longer uses them directly — Download / History moved
+  // out of the sidebar footer into the Tools dropdown owned by
+  // ``WikiHealthToolbar`` (commit that simplified the wiki UX).
   structure,
   activePage,
   onNavigate,
   onRefresh,
   isRefreshing,
   children,
-  versionCount = 0,
   versions = [],
   isVersionsLoading = false,
   viewingVersionNumber = null,
@@ -250,10 +259,16 @@ export function WikiLayout({
   currentLang,
   supportedLanguages,
   onRegenerateInLang,
+  versionHistoryOpen,
+  onVersionHistoryToggle,
 }: WikiLayoutProps) {
   const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_WIDTH);
-  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [internalVersionHistoryOpen, setInternalVersionHistoryOpen] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  // Support both controlled (versionHistoryOpen prop) and uncontrolled mode
+  const showVersionHistory = versionHistoryOpen !== undefined ? versionHistoryOpen : internalVersionHistoryOpen;
+  const handleVersionHistoryToggle = onVersionHistoryToggle ?? (() => setInternalVersionHistoryOpen((v) => !v));
   const isDragging = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const searchableContentRef = useRef<HTMLDivElement>(null);
@@ -340,7 +355,7 @@ export function WikiLayout({
             lang={currentLang}
           />
         </div>
-        <div className="shrink-0 border-t border-border/70 p-3 space-y-2">
+        <div className="shrink-0 border-t border-border/70 p-3">
           {/* Primary action: Regenerate (with language picker). */}
           {currentLang && supportedLanguages && onRegenerateInLang && (
             <WikiRegenerateButton
@@ -354,54 +369,6 @@ export function WikiLayout({
               lang={currentLang}
             />
           )}
-          {/* Secondary actions: Download + Version History. */}
-          <div className="flex gap-1.5">
-            <button
-              onClick={async () => {
-                try {
-                  const res = await authFetch(`${API_BASE}/api/channels/${channelId}/wiki/download`);
-                  if (!res.ok) {
-                    console.error("[wiki] download failed", res.status);
-                    alert(`Download failed (${res.status})`);
-                    return;
-                  }
-                  const blob = await res.blob();
-                  const disposition = res.headers.get("Content-Disposition") || "";
-                  const nameMatch = disposition.match(/filename[^;=\n]*=["']?([^"';\n]+)/);
-                  const filename = nameMatch ? nameMatch[1].trim() : `${channelId}-wiki.md`;
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement("a");
-                  a.href = url;
-                  a.download = filename;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                } catch (err) {
-                  console.error("[wiki] download error", err);
-                  alert("Download failed. Please try again.");
-                }
-              }}
-              className="flex items-center justify-center gap-1.5 flex-1 rounded-md px-3 py-1.5 text-xs font-medium border border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-              title="Download as Markdown"
-            >
-              <Download className="h-3.5 w-3.5" />
-              {wikiT(currentLang, "download")}
-            </button>
-            <button
-              onClick={() => setShowVersionHistory(!showVersionHistory)}
-              disabled={versionCount === 0}
-              className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium border transition-colors ${
-                showVersionHistory
-                  ? "border-primary/30 bg-primary/10 text-primary"
-                  : "border-border/50 bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
-              } disabled:opacity-40 disabled:cursor-not-allowed`}
-              title={versionCount === 0 ? "No previous versions" : `${versionCount} previous version${versionCount !== 1 ? "s" : ""}`}
-            >
-              <History className="h-3.5 w-3.5" />
-              {versionCount > 0 && (
-                <span className="tabular-nums">{versionCount}</span>
-              )}
-            </button>
-          </div>
         </div>
       </div>
 
@@ -418,7 +385,7 @@ export function WikiLayout({
             onBackToCurrent={() => {
               onBackToCurrent?.();
             }}
-            onClose={() => setShowVersionHistory(false)}
+            onClose={handleVersionHistoryToggle}
             lang={currentLang}
           />
         </div>

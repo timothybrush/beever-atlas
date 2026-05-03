@@ -77,8 +77,29 @@ vi.mock("@/components/ui/tooltip", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-function renderToolbar(props: Partial<{ manualMode: boolean }> = {}) {
-  return render(<WikiHealthToolbar channelId="ch-1" manualMode={props.manualMode ?? true} />);
+function renderToolbar(
+  props: Partial<{
+    manualMode: boolean;
+    versionCount: number;
+    failureCount: number;
+    onDownload: () => void;
+    onHistoryToggle: () => void;
+    onRegenerate: () => void;
+    isRegenerating: boolean;
+  }> = {},
+) {
+  return render(
+    <WikiHealthToolbar
+      channelId="ch-1"
+      manualMode={props.manualMode ?? true}
+      versionCount={props.versionCount ?? 0}
+      failureCount={props.failureCount}
+      onDownload={props.onDownload}
+      onHistoryToggle={props.onHistoryToggle}
+      onRegenerate={props.onRegenerate}
+      isRegenerating={props.isRegenerating ?? false}
+    />,
+  );
 }
 
 beforeEach(() => {
@@ -97,31 +118,191 @@ afterEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests
+// Issue 1 — manualMode regression tests
 // ---------------------------------------------------------------------------
 
-describe("WikiHealthToolbar", () => {
-  it("renders Lint Wiki and Maintain Wiki buttons", () => {
-    renderToolbar();
-    expect(screen.getByRole("button", { name: /lint wiki/i })).toBeInTheDocument();
+describe("WikiHealthToolbar — manualMode", () => {
+  it("shows Maintain Wiki button when manualMode=true", () => {
+    renderToolbar({ manualMode: true });
     expect(screen.getByRole("button", { name: /maintain wiki/i })).toBeInTheDocument();
   });
 
-  it("has aria-label on Maintain Wiki button", () => {
+  it("hides Maintain Wiki button when manualMode=false", () => {
+    renderToolbar({ manualMode: false });
+    expect(screen.queryByRole("button", { name: /maintain wiki/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue 2 — Tools menu
+// ---------------------------------------------------------------------------
+
+describe("WikiHealthToolbar — Tools menu", () => {
+  it("renders Tools button always", () => {
     renderToolbar();
+    expect(screen.getByRole("button", { name: /wiki tools menu/i })).toBeInTheDocument();
+  });
+
+  it("Tools menu is closed by default", () => {
+    renderToolbar();
+    expect(screen.queryByRole("menu", { name: /wiki tools/i })).not.toBeInTheDocument();
+  });
+
+  it("opens menu when Tools button is clicked", async () => {
+    renderToolbar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menu", { name: /wiki tools/i })).toBeInTheDocument();
+  });
+
+  it("menu contains Lint Wiki, History, Download items", async () => {
+    renderToolbar({ versionCount: 3 });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /lint wiki/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /history/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /download/i })).toBeInTheDocument();
+  });
+
+  it("Failures item is visible when failureCount > 0", async () => {
+    renderToolbar({ failureCount: 3 });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /view failed extractions/i })).toBeInTheDocument();
+  });
+
+  it("Failures item is hidden when failureCount is 0", async () => {
+    renderToolbar({ failureCount: 0 });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.queryByRole("menuitem", { name: /view failed extractions/i })).not.toBeInTheDocument();
+  });
+
+  it("Failures item is visible when failureCount is undefined (unknown)", async () => {
+    // When count is unknown we show the item (defensive)
+    renderToolbar({ failureCount: undefined });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /view failed extractions/i })).toBeInTheDocument();
+  });
+
+  it("Regenerate from scratch item is shown when onRegenerate is provided", async () => {
+    renderToolbar({ onRegenerate: vi.fn() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /regenerate wiki from scratch/i })).toBeInTheDocument();
+  });
+
+  it("Regenerate shows confirm dialog before firing", async () => {
+    const onRegenerate = vi.fn();
+    renderToolbar({ onRegenerate });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /regenerate wiki from scratch/i }));
+    // Confirm prompt appears — not yet called
+    expect(screen.getByRole("button", { name: /confirm regenerate/i })).toBeInTheDocument();
+    expect(onRegenerate).not.toHaveBeenCalled();
+    // Confirm fires the callback
+    await user.click(screen.getByRole("button", { name: /confirm regenerate/i }));
+    expect(onRegenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it("Cancel on regenerate confirm hides the confirm prompt", async () => {
+    renderToolbar({ onRegenerate: vi.fn() });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /regenerate wiki from scratch/i }));
+    await user.click(screen.getByRole("button", { name: /cancel regenerate/i }));
+    expect(screen.queryByRole("button", { name: /confirm regenerate/i })).not.toBeInTheDocument();
+  });
+
+  it("Lint Wiki click runs lint and opens findings panel", async () => {
+    mockRunLint.mockImplementation(() => {
+      mockLintState.report = {
+        findings: [],
+        pages_scanned: 3,
+        channel_id: "ch-1",
+        target_lang: "en",
+        generated_at: new Date().toISOString(),
+      };
+      return Promise.resolve();
+    });
+
+    renderToolbar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /lint wiki/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog", { name: /lint findings/i })).toBeInTheDocument();
+    });
+  });
+
+  it("Download calls onDownload", async () => {
+    const onDownload = vi.fn();
+    renderToolbar({ onDownload });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /download wiki/i }));
+    expect(onDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("History calls onHistoryToggle", async () => {
+    const onHistoryToggle = vi.fn();
+    renderToolbar({ onHistoryToggle, versionCount: 2 });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /version history/i }));
+    expect(onHistoryToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("Failures click opens FailedBatchPanel", async () => {
+    renderToolbar({ failureCount: 5 });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /view failed extractions/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("failed-batch-panel")).toBeInTheDocument();
+    });
+  });
+
+  it("menu closes on Escape", async () => {
+    renderToolbar();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Legacy tests — carried over / migrated
+// ---------------------------------------------------------------------------
+
+describe("WikiHealthToolbar — Maintain Wiki", () => {
+  it("has aria-label on Maintain Wiki button", () => {
+    renderToolbar({ manualMode: true });
     const btn = screen.getByRole("button", { name: /maintain wiki/i });
     expect(btn).toHaveAttribute("aria-label");
   });
 
-  it("has aria-label on Lint Wiki button", () => {
-    renderToolbar();
-    const btn = screen.getByRole("button", { name: /lint wiki/i });
-    expect(btn).toHaveAttribute("aria-label");
+  it("shows loading state while maintaining", () => {
+    mockMaintainState.loading = true;
+    renderToolbar({ manualMode: true });
+    expect(screen.getByRole("button", { name: /maintain wiki/i })).toBeDisabled();
   });
 
+  it("shows maintain error with retry button", () => {
+    mockMaintainState.error = "Maintain failed";
+    renderToolbar({ manualMode: true });
+    expect(screen.getByText("Maintain failed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /retry maintain/i })).toBeInTheDocument();
+  });
+});
+
+describe("WikiHealthToolbar — Lint findings panel", () => {
   it("shows loading skeleton during lint scan with role=status and aria-live", async () => {
-    // First open the panel with loading=false so we can click the button,
-    // then simulate a second lint run that shows the loading state.
     mockLintState.loading = false;
     mockLintState.report = {
       findings: [],
@@ -134,17 +315,20 @@ describe("WikiHealthToolbar", () => {
     const { rerender } = renderToolbar();
     const user = userEvent.setup();
 
-    // Click lint — panel opens
-    await user.click(screen.getByRole("button", { name: /lint wiki/i }));
+    // Open the Tools menu and click Lint Wiki
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /lint wiki/i }));
+
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
     });
 
-    // Now simulate lint running again (e.g. a retry) — flip loading=true
+    // Now simulate lint running again — flip loading=true
     mockLintState.loading = true;
-    rerender(<WikiHealthToolbar channelId="ch-1" manualMode={true} />);
+    rerender(
+      <WikiHealthToolbar channelId="ch-1" manualMode={true} />,
+    );
 
-    // The loading skeleton should now be visible inside the open panel
     const status = screen.getByRole("status");
     expect(status).toBeInTheDocument();
     expect(status).toHaveAttribute("aria-live", "polite");
@@ -156,7 +340,8 @@ describe("WikiHealthToolbar", () => {
 
     renderToolbar();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /lint wiki/i }));
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /lint wiki/i }));
 
     expect(screen.getByRole("button", { name: /retry lint/i })).toBeInTheDocument();
   });
@@ -167,9 +352,11 @@ describe("WikiHealthToolbar", () => {
 
     renderToolbar();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /lint wiki/i }));
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /lint wiki/i }));
     await user.click(screen.getByRole("button", { name: /retry lint/i }));
 
+    // runLint called once by the menu click, once by retry
     expect(mockRunLint).toHaveBeenCalledTimes(2);
   });
 
@@ -187,7 +374,8 @@ describe("WikiHealthToolbar", () => {
 
     renderToolbar();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /lint wiki/i }));
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /lint wiki/i }));
 
     await waitFor(() => {
       expect(screen.getByRole("dialog")).toBeInTheDocument();
@@ -206,33 +394,11 @@ describe("WikiHealthToolbar", () => {
 
     renderToolbar();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /lint wiki/i }));
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /lint wiki/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/no issues/i)).toBeInTheDocument();
-    });
-  });
-
-  it("shows maintain error with retry button", async () => {
-    mockMaintainState.error = "Maintain failed";
-    renderToolbar();
-
-    expect(screen.getByText("Maintain failed")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /retry maintain/i })).toBeInTheDocument();
-  });
-
-  it("hides Maintain Wiki button when manualMode=false", () => {
-    renderToolbar({ manualMode: false });
-    expect(screen.queryByRole("button", { name: /maintain wiki/i })).not.toBeInTheDocument();
-  });
-
-  it("opens FailedBatchPanel when Failures button is clicked", async () => {
-    renderToolbar();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /view failed extractions/i }));
-
-    await waitFor(() => {
-      expect(screen.getByTestId("failed-batch-panel")).toBeInTheDocument();
     });
   });
 });
