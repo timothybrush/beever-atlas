@@ -4,10 +4,16 @@ import {
   ChevronDown,
   ClipboardCheck,
   Download,
+  Eye,
+  EyeOff,
   History,
   Loader2,
+  Pin,
+  PinOff,
   RefreshCw,
+  Scissors,
   Sparkles,
+  Combine,
   Wrench,
   X,
   ListX,
@@ -39,6 +45,25 @@ interface Props {
   isRegenerating?: boolean;
   /** Number of failed extractions — Failures item is hidden when 0. */
   failureCount?: number;
+  // ---- wiki-llm-native-redesign §5.15 — per-page curation -----------
+  /** Slug of the page currently visible. When undefined, curation
+   * items are hidden. */
+  activeSlug?: string;
+  /** Whether the active page is currently pinned. Drives the Pin
+   * vs Unpin menu label. */
+  activePagePinned?: boolean;
+  /** Whether the active page is currently hidden. Drives the Hide
+   * vs Show menu label. */
+  activePageHidden?: boolean;
+  /** Pin or unpin the active page. Argument toggles the state. */
+  onPinToggle?: (pinned: boolean) => void;
+  /** Hide or show the active page. Argument toggles the state. */
+  onHideToggle?: (hidden: boolean) => void;
+  /** Open the "split this page" flow. The toolbar collects the new
+   * title; the parent supplies the fact-id selection. */
+  onSplit?: (newTitle: string) => void;
+  /** Open the "merge another page into this one" flow. */
+  onMerge?: (sourceSlug: string) => void;
 }
 
 const SEVERITY_STYLES = {
@@ -73,6 +98,13 @@ export function WikiHealthToolbar({
   onRegenerate,
   isRegenerating = false,
   failureCount,
+  activeSlug,
+  activePagePinned = false,
+  activePageHidden = false,
+  onPinToggle,
+  onHideToggle,
+  onSplit,
+  onMerge,
 }: Props) {
   const lint = useWikiLint(channelId);
   const maintain = useWikiMaintain(channelId);
@@ -80,22 +112,40 @@ export function WikiHealthToolbar({
   const [failuresOpen, setFailuresOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [confirmRegenerate, setConfirmRegenerate] = useState(false);
+  // Curation prompt-modals (§5.15) — V1 are simple text-input dialogs.
+  // The full split (fact-id picker) and merge (existing-page picker)
+  // UIs are deferred to a follow-up; these capture the operator's
+  // primary input and fire the parent callback.
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [splitTitle, setSplitTitle] = useState("");
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeSlug, setMergeSlug] = useState("");
   const toolsRef = useRef<HTMLDivElement>(null);
+  const showCurationItems = !!activeSlug;
 
   // Close everything on Escape
   useEffect(() => {
-    if (!reportOpen && !failuresOpen && !toolsOpen) return;
+    if (
+      !reportOpen &&
+      !failuresOpen &&
+      !toolsOpen &&
+      !splitOpen &&
+      !mergeOpen
+    )
+      return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         setReportOpen(false);
         setFailuresOpen(false);
         setToolsOpen(false);
         setConfirmRegenerate(false);
+        setSplitOpen(false);
+        setMergeOpen(false);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [reportOpen, failuresOpen, toolsOpen]);
+  }, [reportOpen, failuresOpen, toolsOpen, splitOpen, mergeOpen]);
 
   // Close Tools menu on outside click
   useEffect(() => {
@@ -237,6 +287,93 @@ export function WikiHealthToolbar({
               <Download size={12} className="shrink-0" />
               <span className="flex-1">Download</span>
             </button>
+
+            {/* Curation block (§5.15) — only when a page is active */}
+            {showCurationItems && (
+              <div className="my-1 h-px bg-border/60" />
+            )}
+            {showCurationItems && onPinToggle && (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setToolsOpen(false);
+                  onPinToggle(!activePagePinned);
+                }}
+                className={TOOL_BTN}
+                aria-label={
+                  activePagePinned
+                    ? "Unpin this page — allow the maintainer to restructure it"
+                    : "Pin this page — keep its current layout"
+                }
+              >
+                {activePagePinned ? (
+                  <PinOff size={12} className="shrink-0" />
+                ) : (
+                  <Pin size={12} className="shrink-0" />
+                )}
+                <span className="flex-1">
+                  {activePagePinned ? "Unpin" : "Pin"}
+                </span>
+              </button>
+            )}
+            {showCurationItems && onHideToggle && (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setToolsOpen(false);
+                  onHideToggle(!activePageHidden);
+                }}
+                className={TOOL_BTN}
+                aria-label={
+                  activePageHidden
+                    ? "Show this page in human nav"
+                    : "Hide this page from human nav (still indexed for agents)"
+                }
+              >
+                {activePageHidden ? (
+                  <Eye size={12} className="shrink-0" />
+                ) : (
+                  <EyeOff size={12} className="shrink-0" />
+                )}
+                <span className="flex-1">
+                  {activePageHidden ? "Show" : "Hide"}
+                </span>
+              </button>
+            )}
+            {showCurationItems && onSplit && (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setSplitTitle("");
+                  setToolsOpen(false);
+                  setSplitOpen(true);
+                }}
+                className={TOOL_BTN}
+                aria-label="Split this page into two — extract a subset of facts to a new page"
+              >
+                <Scissors size={12} className="shrink-0" />
+                <span className="flex-1">Split…</span>
+              </button>
+            )}
+            {showCurationItems && onMerge && (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setMergeSlug("");
+                  setToolsOpen(false);
+                  setMergeOpen(true);
+                }}
+                className={TOOL_BTN}
+                aria-label="Merge another page into this one"
+              >
+                <Combine size={12} className="shrink-0" />
+                <span className="flex-1">Merge…</span>
+              </button>
+            )}
 
             {/* Divider — only when Failures or Regenerate is shown */}
             {(showFailuresItem || onRegenerate) && (
@@ -441,6 +578,115 @@ export function WikiHealthToolbar({
           channelId={channelId}
           onClose={() => setFailuresOpen(false)}
         />
+      )}
+
+      {/* §5.15 — Split prompt modal */}
+      {splitOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Split wiki page"
+          onClick={() => setSplitOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-foreground">Split this page</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Choose a title for the new page. The maintainer will route a
+              subset of this page's facts there on the next pass.
+            </p>
+            <input
+              type="text"
+              autoFocus
+              value={splitTitle}
+              onChange={(e) => setSplitTitle(e.target.value)}
+              placeholder="e.g. Authentication — Session Policy"
+              className="mt-4 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+              aria-label="New page title"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSplitOpen(false)}
+                className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const title = splitTitle.trim();
+                  if (!title) return;
+                  onSplit?.(title);
+                  setSplitOpen(false);
+                }}
+                disabled={!splitTitle.trim()}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                aria-label="Confirm split"
+              >
+                Split
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* §5.15 — Merge prompt modal */}
+      {mergeOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Merge wiki page"
+          onClick={() => setMergeOpen(false)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-semibold text-foreground">Merge into this page</h3>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Enter the slug of the page that should be merged INTO the
+              current one. The merged-from page will be hidden from human
+              nav and future facts will route here.
+            </p>
+            <input
+              type="text"
+              autoFocus
+              value={mergeSlug}
+              onChange={(e) => setMergeSlug(e.target.value)}
+              placeholder="e.g. topic-auth-old"
+              className="mt-4 w-full rounded-md border border-border bg-background px-3 py-2 text-sm font-mono"
+              aria-label="Source slug"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setMergeOpen(false)}
+                className="rounded-md border border-border px-4 py-2 text-sm font-medium hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const slug = mergeSlug.trim();
+                  if (!slug) return;
+                  onMerge?.(slug);
+                  setMergeOpen(false);
+                }}
+                disabled={!mergeSlug.trim()}
+                className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                aria-label="Confirm merge"
+              >
+                Merge
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

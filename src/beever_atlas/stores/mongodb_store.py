@@ -54,11 +54,32 @@ class MongoDBStore:
         # Aggregated by the ``GET /api/admin/wiki-drift/summary`` endpoint
         # to drive the soak-pass dashboard.
         self._wiki_drift_reports = self._db["wiki_drift_reports"]
+        # ``wiki-llm-native-redesign`` collections.
+        # ``wiki_merge_proposals`` carries operator-actionable suggestions
+        # surfaced by ``WikiMaintainer._record_merge_proposals`` whenever
+        # two pages cross the ``WIKI_PAGE_MERGE_THRESHOLD`` Jaccard bar.
+        self._wiki_merge_proposals = self._db["wiki_merge_proposals"]
+        # ``wiki_proposed_edits`` is reserved for §7.9 (v2 agent
+        # write-through ``propose_wiki_edit``). v1 does NOT write here;
+        # the collection is created with TTL/indexes so the v2 ship is
+        # a code-only change.
+        self._wiki_proposed_edits = self._db["wiki_proposed_edits"]
 
     @property
     def db(self):
         """Expose the underlying AsyncIOMotorDatabase for stores that need it."""
         return self._db
+
+    @property
+    def wiki_merge_proposals(self):
+        """Operator-facing merge suggestions surfaced by the maintainer
+        when two pages share enough facts to suggest consolidation."""
+        return self._wiki_merge_proposals
+
+    @property
+    def wiki_proposed_edits(self):
+        """Reserved for §7.9 — v2 agent ``propose_wiki_edit`` writes here."""
+        return self._wiki_proposed_edits
 
     async def startup(self) -> None:
         """Ping MongoDB to verify the connection is alive."""
@@ -122,6 +143,41 @@ class MongoDBStore:
         await self._wiki_drift_reports.create_index(
             [("channel_id", 1), ("ts", -1)],
             name="wiki_drift_reports_channel_ts",
+        )
+        # ``wiki_merge_proposals`` indexes:
+        # 1) Compound (channel_id, status, surfaced_at DESC) so the
+        # operator UI's "open proposals" query is one scan over a
+        # bounded range. Status values: 'open' | 'approved' | 'rejected'.
+        await self._wiki_merge_proposals.create_index(
+            [("channel_id", 1), ("status", 1), ("surfaced_at", -1)],
+            name="wiki_merge_proposals_channel_status_surfaced",
+        )
+        # 2) Idempotency on (channel_id, target_lang, source_slug, target_slug)
+        # so re-firing on_extraction_done with stable inputs does not
+        # double-record the same suggestion.
+        await self._wiki_merge_proposals.create_index(
+            [
+                ("channel_id", 1),
+                ("target_lang", 1),
+                ("source_slug", 1),
+                ("target_slug", 1),
+            ],
+            unique=True,
+            name="wiki_merge_proposals_compound_unique",
+        )
+        # ``wiki_proposed_edits`` (§7.8 — reserved for v2):
+        # 1) TTL — proposals expire after 30 days so a stale list cannot
+        # accumulate unbounded.
+        await self._wiki_proposed_edits.create_index(
+            [("created_at", 1)],
+            expireAfterSeconds=30 * 24 * 3600,
+            name="wiki_proposed_edits_ttl",
+        )
+        # 2) Compound (channel_id, slug, status) for the operator UI
+        # query "open proposals on this page".
+        await self._wiki_proposed_edits.create_index(
+            [("channel_id", 1), ("slug", 1), ("status", 1)],
+            name="wiki_proposed_edits_channel_slug_status",
         )
         # Seed global policy defaults from Settings if not present
         existing = await self._global_policy_defaults.find_one({"id": "global"})

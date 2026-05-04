@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
 from beever_atlas.infra.auth import Principal, require_user
 from beever_atlas.infra.channel_access import assert_channel_access
@@ -376,3 +378,276 @@ async def maintain_wiki(
         counters.get("errors", 0),
     )
     return counters
+
+
+# ---------------------------------------------------------------------------
+# wiki-llm-native-redesign — curation endpoints (§5.1–§5.4)
+# ---------------------------------------------------------------------------
+
+
+class _PinBody(BaseModel):
+    """POST /pin body."""
+
+    reason: str = Field(default="", max_length=512)
+    # ``pinned`` defaults to True so a vanilla POST pins. The frontend
+    # can flip it to False to unpin without needing a separate endpoint.
+    pinned: bool = True
+
+
+class _HideBody(BaseModel):
+    """POST /hide body."""
+
+    reason: str = Field(default="", max_length=512)
+    hidden: bool = True
+
+
+class _SplitBody(BaseModel):
+    """POST /split body — extract a subset of facts to a new page."""
+
+    new_title: str = Field(min_length=1, max_length=256)
+    fact_ids: list[str] = Field(default_factory=list, max_length=1000)
+
+
+class _MergeBody(BaseModel):
+    """POST /merge body — collapse ``source_slug`` into the URL slug."""
+
+    source_slug: str = Field(min_length=1, max_length=256)
+
+
+def _slugify_title(title: str) -> str:
+    """Match the maintainer's slug derivation — ascii-only kebab-case.
+
+    Aligned with ``WikiMaintainer.apply_update``'s
+    ``page_id.replace(":", "-")`` fallback so split-created pages get
+    stable slugs that don't collide with topic / entity prefixes.
+    """
+    out: list[str] = []
+    for ch in title.strip().lower():
+        if ch.isalnum():
+            out.append(ch)
+        elif ch in (" ", "-", "_", "/"):
+            out.append("-")
+    cleaned = "".join(out).strip("-")
+    while "--" in cleaned:
+        cleaned = cleaned.replace("--", "-")
+    return cleaned or "untitled"
+
+
+async def _load_page_store():
+    """Centralised page-store handle for the curation endpoints.
+
+    Mirrors the ``cache._db`` access pattern used by ``lint_wiki`` so
+    the new endpoints reuse the same Mongo connection pool.
+    """
+    from beever_atlas.wiki.page_store import WikiPageStore
+
+    cache = _get_cache()
+    await cache._ensure_db()
+    return WikiPageStore(db=cache._db)
+
+
+@router.post("/pages/{slug}/pin")
+async def pin_wiki_page(
+    channel_id: str,
+    slug: str,
+    body: _PinBody,
+    target_lang: str | None = Query(default=None),
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Mark a page as pinned (or unpinned when ``pinned=false``).
+
+    Pinned pages still receive content updates from the maintainer but
+    the prompt addendum constrains them to ``do not restructure
+    sections, do not rename`` — preserving the operator's editorial
+    intent. ``version`` is NOT bumped (curation, not content).
+    """
+    await assert_channel_access(principal, channel_id)
+    lang = await _resolve_target_lang(channel_id, target_lang)
+    store = await _load_page_store()
+    existing = await store.get_page_by_slug(channel_id, slug, target_lang=lang)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
+    new_state: dict[str, object] = {
+        "pinned": bool(body.pinned),
+        "hidden": bool(existing.pin_state.get("hidden", False)),
+        "reason": body.reason or existing.pin_state.get("reason", ""),
+        "set_by": principal.id,
+        "set_at": datetime.now(tz=UTC).isoformat(),
+    }
+    updated = await store.update_pin_state(channel_id, slug, new_state, target_lang=lang)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
+    return updated.model_dump(mode="json")
+
+
+@router.post("/pages/{slug}/hide")
+async def hide_wiki_page(
+    channel_id: str,
+    slug: str,
+    body: _HideBody,
+    target_lang: str | None = Query(default=None),
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Mark a page hidden from human nav (still indexed for agents).
+
+    Sets ``pin_state.hidden = body.hidden``. Hidden pages are excluded
+    from ``list_pages_by_kind(scope="human")`` but ``scope="all"``
+    still returns them so the MCP read tools (with the appropriate
+    scope) can serve them to agents.
+    """
+    await assert_channel_access(principal, channel_id)
+    lang = await _resolve_target_lang(channel_id, target_lang)
+    store = await _load_page_store()
+    existing = await store.get_page_by_slug(channel_id, slug, target_lang=lang)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
+    new_state: dict[str, object] = {
+        "pinned": bool(existing.pin_state.get("pinned", False)),
+        "hidden": bool(body.hidden),
+        "reason": body.reason or existing.pin_state.get("reason", ""),
+        "set_by": principal.id,
+        "set_at": datetime.now(tz=UTC).isoformat(),
+    }
+    updated = await store.update_pin_state(channel_id, slug, new_state, target_lang=lang)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
+    return updated.model_dump(mode="json")
+
+
+@router.post("/pages/{slug}/split", status_code=201)
+async def split_wiki_page(
+    channel_id: str,
+    slug: str,
+    body: _SplitBody,
+    target_lang: str | None = Query(default=None),
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Split a subset of a page's facts into a new page.
+
+    Creates a placeholder page seeded with the operator's title, kind
+    derived from the source's kind, and ``last_facts_seen`` carrying
+    the moved fact ids. The source page's ``last_facts_seen`` shrinks
+    by the same set so the maintainer doesn't keep treating those
+    facts as "already integrated here". The new page is is_dirty=True
+    so the maintainer's next pass rewrites it from the moved facts.
+    """
+    from beever_atlas.models.persistence import WikiPage, WikiPageSection
+
+    await assert_channel_access(principal, channel_id)
+    lang = await _resolve_target_lang(channel_id, target_lang)
+    if not body.fact_ids:
+        raise HTTPException(status_code=400, detail="fact_ids must not be empty for split")
+    store = await _load_page_store()
+    source = await store.get_page_by_slug(channel_id, slug, target_lang=lang)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
+
+    new_slug = _slugify_title(body.new_title)
+    if new_slug == source.slug:
+        raise HTTPException(
+            status_code=400, detail="new_title must yield a slug different from source"
+        )
+    # Reject if the destination slug already exists — splits must not
+    # silently merge into an unrelated page.
+    if await store.get_page_by_slug(channel_id, new_slug, target_lang=lang):
+        raise HTTPException(
+            status_code=409,
+            detail=f"slug {new_slug!r} already exists; choose a different title",
+        )
+
+    moved = [fid for fid in body.fact_ids if fid in set(source.last_facts_seen)]
+    new_page = WikiPage(
+        channel_id=channel_id,
+        target_lang=lang,
+        page_id=f"topic:{new_slug}",
+        title=body.new_title,
+        slug=new_slug,
+        kind=source.kind,
+        sections=[WikiPageSection(id="overview", title="Overview", content_md="")],
+        last_facts_seen=moved,
+        is_dirty=True,
+        page_voice_seed=source.page_voice_seed,
+    )
+    await store.save_page(new_page)
+    if moved:
+        await store.remove_facts_from_page(channel_id, slug, moved, target_lang=lang)
+    return {
+        "source_slug": slug,
+        "new_slug": new_slug,
+        "moved_fact_count": len(moved),
+        "new_page": (
+            await store.get_page_by_slug(channel_id, new_slug, target_lang=lang)
+        ).model_dump(mode="json")
+        if moved is not None
+        else None,
+    }
+
+
+@router.post("/pages/{slug}/merge")
+async def merge_wiki_page(
+    channel_id: str,
+    slug: str,
+    body: _MergeBody,
+    target_lang: str | None = Query(default=None),
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Mark ``body.source_slug`` as merged into the URL ``slug``.
+
+    The source page is hidden from human nav and its ``merged_into``
+    field carries the target slug. Future fact routing in
+    ``WikiMaintainer.plan_updates`` re-routes any plan_updates entry
+    keyed to the source's page_id to the target so subsequent batches
+    flow into the canonical page.
+    """
+    await assert_channel_access(principal, channel_id)
+    lang = await _resolve_target_lang(channel_id, target_lang)
+    if body.source_slug == slug:
+        raise HTTPException(status_code=400, detail="source_slug must differ from target slug")
+    store = await _load_page_store()
+    target = await store.get_page_by_slug(channel_id, slug, target_lang=lang)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"No target wiki page slug={slug!r}")
+    source = await store.get_page_by_slug(channel_id, body.source_slug, target_lang=lang)
+    if source is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No source wiki page slug={body.source_slug!r}",
+        )
+    updated = await store.record_merged_into(channel_id, body.source_slug, slug, target_lang=lang)
+    if updated is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No source wiki page slug={body.source_slug!r}",
+        )
+    return {
+        "source_slug": body.source_slug,
+        "target_slug": slug,
+        "source": updated.model_dump(mode="json"),
+    }
+
+
+@router.get("/pages-by-slug/{slug}")
+async def get_wiki_page_by_slug(
+    channel_id: str,
+    slug: str,
+    target_lang: str | None = Query(default=None),
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Resolve a slug to its page (or follow a merge redirect).
+
+    When the page has ``merged_into`` set, the response is a 301
+    redirect to the canonical target's slug — the operator UI follows
+    the redirect transparently.
+    """
+    await assert_channel_access(principal, channel_id)
+    lang = await _resolve_target_lang(channel_id, target_lang)
+    store = await _load_page_store()
+    page = await store.get_page_by_slug(channel_id, slug, target_lang=lang)
+    if page is None:
+        raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
+    if page.merged_into:
+        return RedirectResponse(  # type: ignore[return-value]
+            url=f"/api/channels/{channel_id}/wiki/pages-by-slug/{page.merged_into}",
+            status_code=301,
+        )
+    return page.model_dump(mode="json")

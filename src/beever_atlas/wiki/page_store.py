@@ -263,5 +263,248 @@ class WikiPageStore:
         )
         return bool(result.deleted_count)
 
+    # ------------------------------------------------------------------
+    # wiki-llm-native-redesign — curation API support (§5.5)
+    # ------------------------------------------------------------------
+
+    async def get_page_by_slug(
+        self, channel_id: str, slug: str, target_lang: str = "en"
+    ) -> WikiPage | None:
+        """Look up one page by slug.
+
+        Slugs are immutable after first-touch (per the redesign spec)
+        so this is the canonical handle the curation HTTP endpoints
+        accept in the URL. Returns None on miss.
+        """
+        if self._collection is None or not slug:
+            return None
+        doc = await self._collection.find_one(
+            {
+                "channel_id": channel_id,
+                "target_lang": target_lang,
+                "slug": slug,
+            }
+        )
+        if doc is None:
+            return None
+        doc.pop("_id", None)
+        return WikiPage.model_validate(doc)
+
+    async def list_pages_by_kind(
+        self,
+        channel_id: str,
+        kind: str | None = None,
+        target_lang: str = "en",
+        scope: str = "human",
+    ) -> list[WikiPage]:
+        """List pages with optional ``kind`` filter and visibility ``scope``.
+
+        ``scope="human"`` (default) excludes pages whose ``pin_state.hidden``
+        is True — these are still indexed for agent retrieval but should
+        not appear in human nav. ``scope="all"`` includes everything;
+        callers MUST verify the caller has the appropriate permission
+        before requesting it.
+        """
+        if self._collection is None:
+            return []
+        query: dict[str, Any] = {"channel_id": channel_id, "target_lang": target_lang}
+        if kind:
+            query["kind"] = kind
+        if scope == "human":
+            # Excludes both hidden pages AND merged pages (which are
+            # functionally hidden from human nav — the redirect target
+            # carries the canonical content).
+            query["pin_state.hidden"] = {"$ne": True}
+            query["merged_into"] = None
+        cursor = self._collection.find(query).sort("updated_at", -1)
+        pages: list[WikiPage] = []
+        async for doc in cursor:
+            doc.pop("_id", None)
+            pages.append(WikiPage.model_validate(doc))
+        return pages
+
+    async def update_pin_state(
+        self,
+        channel_id: str,
+        slug: str,
+        pin_state: dict[str, Any],
+        target_lang: str = "en",
+    ) -> WikiPage | None:
+        """Update a page's curation flags WITHOUT bumping version.
+
+        ``pin_state`` carries the operator's intent (pinned / hidden /
+        reason / set_by / set_at). Curation writes are editorial — the
+        page's content has not changed — so ``version`` stays put. The
+        ``updated_at`` timestamp is touched so the maintainer's
+        list_pages-by-recency ordering reflects the curation event.
+        """
+        if self._collection is None:
+            return None
+        result = await self._collection.find_one_and_update(
+            {
+                "channel_id": channel_id,
+                "target_lang": target_lang,
+                "slug": slug,
+            },
+            {
+                "$set": {
+                    "pin_state": pin_state,
+                    "updated_at": datetime.now(tz=UTC).isoformat(),
+                }
+            },
+            return_document=True,
+        )
+        if result is None:
+            return None
+        # PyMongo returns the post-update doc; some fakes return the pre-update.
+        # The contract here is "post-update", which we get by either:
+        #   - return_document=True (motor); or
+        #   - re-querying. Re-query path:
+        if isinstance(result, dict) and result.get("pin_state") != pin_state:
+            doc = await self._collection.find_one(
+                {
+                    "channel_id": channel_id,
+                    "target_lang": target_lang,
+                    "slug": slug,
+                }
+            )
+            if doc is not None:
+                result = doc
+        result.pop("_id", None)
+        return WikiPage.model_validate(result)
+
+    async def record_merged_into(
+        self,
+        channel_id: str,
+        source_slug: str,
+        target_slug: str,
+        target_lang: str = "en",
+    ) -> WikiPage | None:
+        """Set ``source.merged_into = target_slug`` and hide the source.
+
+        Idempotent — calling twice with the same target leaves the
+        source unchanged. Like ``update_pin_state``, this does NOT bump
+        ``version`` (operator action, not content edit).
+        """
+        if self._collection is None:
+            return None
+        # Read current pin_state so the merge does not clobber an
+        # existing reason / set_by.
+        existing = await self._collection.find_one(
+            {"channel_id": channel_id, "target_lang": target_lang, "slug": source_slug}
+        )
+        if existing is None:
+            return None
+        pin_state = dict(existing.get("pin_state") or {})
+        pin_state["hidden"] = True
+        pin_state.setdefault("reason", f"merged into {target_slug}")
+        pin_state["set_at"] = datetime.now(tz=UTC).isoformat()
+        result = await self._collection.find_one_and_update(
+            {"channel_id": channel_id, "target_lang": target_lang, "slug": source_slug},
+            {
+                "$set": {
+                    "merged_into": target_slug,
+                    "pin_state": pin_state,
+                    "updated_at": datetime.now(tz=UTC).isoformat(),
+                }
+            },
+            return_document=True,
+        )
+        if result is None:
+            return None
+        if isinstance(result, dict) and result.get("merged_into") != target_slug:
+            doc = await self._collection.find_one(
+                {
+                    "channel_id": channel_id,
+                    "target_lang": target_lang,
+                    "slug": source_slug,
+                }
+            )
+            if doc is not None:
+                result = doc
+        result.pop("_id", None)
+        return WikiPage.model_validate(result)
+
+    async def find_merge_candidates(
+        self,
+        channel_id: str,
+        threshold: float = 0.70,
+        target_lang: str = "en",
+    ) -> list[tuple[str, str, float]]:
+        """Surface page pairs whose ``last_facts_seen`` Jaccard overlap
+        exceeds ``threshold``.
+
+        Returns a list of ``(slug_a, slug_b, jaccard)`` tuples sorted by
+        descending Jaccard. The caller (``on_extraction_done`` subscriber)
+        writes these to the ``wiki_merge_proposals`` collection and the
+        operator UI surfaces them for one-click approval — the
+        maintainer NEVER auto-merges.
+
+        Pairs where either page is already hidden / merged are skipped
+        — they are functionally retired and should not show up in the
+        proposal stream.
+        """
+        if self._collection is None:
+            return []
+        cursor = self._collection.find(
+            {
+                "channel_id": channel_id,
+                "target_lang": target_lang,
+                "merged_into": None,
+                "pin_state.hidden": {"$ne": True},
+            }
+        )
+        pages: list[dict[str, Any]] = []
+        async for doc in cursor:
+            facts = doc.get("last_facts_seen") or []
+            if not facts:
+                continue
+            slug = doc.get("slug") or ""
+            if not slug:
+                continue
+            pages.append({"slug": slug, "facts": set(facts)})
+        out: list[tuple[str, str, float]] = []
+        for i in range(len(pages)):
+            for j in range(i + 1, len(pages)):
+                a, b = pages[i], pages[j]
+                inter = a["facts"] & b["facts"]
+                if not inter:
+                    continue
+                union = a["facts"] | b["facts"]
+                jaccard = len(inter) / len(union) if union else 0.0
+                if jaccard >= threshold:
+                    out.append((a["slug"], b["slug"], jaccard))
+        out.sort(key=lambda t: t[2], reverse=True)
+        return out
+
+    async def remove_facts_from_page(
+        self,
+        channel_id: str,
+        slug: str,
+        fact_ids: list[str],
+        target_lang: str = "en",
+    ) -> bool:
+        """Drop the given fact ids from ``last_facts_seen`` on a page.
+
+        Used by the split endpoint after the operator extracts a subset
+        of a page's facts to a new page — the source's
+        ``last_facts_seen`` must shrink so the maintainer doesn't keep
+        treating those facts as "already integrated here".
+        """
+        if self._collection is None or not fact_ids:
+            return False
+        result = await self._collection.update_one(
+            {
+                "channel_id": channel_id,
+                "target_lang": target_lang,
+                "slug": slug,
+            },
+            {
+                "$pull": {"last_facts_seen": {"$in": list(fact_ids)}},
+                "$set": {"updated_at": datetime.now(tz=UTC).isoformat()},
+            },
+        )
+        return bool(result.modified_count)
+
 
 __all__ = ["WikiPageStore", "WikiPage", "WikiPageSection", "WikiTension"]

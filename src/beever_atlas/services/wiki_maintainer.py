@@ -242,8 +242,40 @@ def _render_kind_prompt(
             f"  {retry_validation_error}\n"
             "Re-emit the entire JSON object with kind_schema fixed.\n"
         )
+    if _is_page_pinned(page):
+        out += _PINNED_PAGE_ADDENDUM
     out += "\n\n--- OUTPUT (JSON only) ---\n"
     return out
+
+
+# Prompt addendum the maintainer appends when a page is pinned. The
+# operator's pin signals "this layout is intentional — do not
+# restructure" — so the LLM still updates content but cannot rename
+# sections, drop the title, or reorder the affected_sections array.
+_PINNED_PAGE_ADDENDUM = (
+    "\n\n--- CURATION CONSTRAINTS ---\n"
+    "This page is PINNED by the operator. You MUST:\n"
+    "  - keep every existing section_id stable;\n"
+    "  - not rename the page title;\n"
+    "  - not drop or reorder existing sections;\n"
+    "  - integrate new facts into existing sections rather than "
+    "creating new ones, unless absolutely required.\n"
+    "Pinned pages are load-bearing — the operator pinned this exact "
+    "layout deliberately.\n"
+)
+
+
+def _is_page_pinned(page: "WikiPage") -> bool:
+    """True when the operator has flipped ``pin_state.pinned``.
+
+    Defensive against legacy rows where ``pin_state`` is missing or
+    not a dict (the model defaults to a populated dict so this is the
+    deserialization-edge case).
+    """
+    state = getattr(page, "pin_state", None)
+    if not isinstance(state, dict):
+        return False
+    return bool(state.get("pinned"))
 
 
 # ---------------------------------------------------------------------------
@@ -499,12 +531,15 @@ def _render_apply_update_prompt(
             for f in new_facts
         ],
     }
-    return (
+    body = (
         _APPLY_UPDATE_SYSTEM_PROMPT
         + "\n\n--- INPUT ---\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
-        + "\n\n--- OUTPUT (JSON only) ---\n"
     )
+    if _is_page_pinned(page):
+        body += _PINNED_PAGE_ADDENDUM
+    body += "\n\n--- OUTPUT (JSON only) ---\n"
+    return body
 
 
 def _parse_apply_update_response(raw: str) -> list["WikiPageSection"]:
@@ -727,7 +762,25 @@ class WikiMaintainer:
         # to the Weaviate store; tests stub it.
         facts = await self._load_facts(channel_id, fact_ids)
         plan = self.plan_updates(facts)
+        # Curation-aware re-routing (§5.6): pages with `merged_into` set
+        # forward their fact list to the merge target so future plan
+        # outputs converge on the canonical page. This MUST happen
+        # before counters/dirty/apply_update — those callers consume
+        # the redirected plan.
+        plan = await self._apply_merge_redirects(
+            plan, channel_id=channel_id, target_lang=target_lang
+        )
         counters["affected_pages"] = len(plan)
+        # Surface high-overlap merge candidates as proposals (§5.8).
+        # Best-effort — a Mongo write hiccup must not stall the
+        # extraction event handler.
+        try:
+            await self._record_merge_proposals(channel_id=channel_id, target_lang=target_lang)
+        except Exception:  # noqa: BLE001 — best-effort
+            logger.exception(
+                "event=wiki_merge_proposal_record_failed channel_id=%s",
+                channel_id,
+            )
 
         if mode == "manual":
             modified = await self._page_store.mark_dirty(
@@ -1145,6 +1198,128 @@ class WikiMaintainer:
                 page.channel_id,
                 page.page_id,
             )
+
+    # ------------------------------------------------------------------
+    # wiki-llm-native-redesign §5.6 / §5.8 — curation-aware routing
+    # ------------------------------------------------------------------
+
+    async def _apply_merge_redirects(
+        self,
+        plan: dict[str, list[str]],
+        *,
+        channel_id: str,
+        target_lang: str,
+    ) -> dict[str, list[str]]:
+        """Re-route plan entries whose page has ``merged_into`` set.
+
+        Builds a ``{source_slug: target_slug}`` redirect map by scanning
+        every page in the channel; then for each plan entry whose page
+        is a merge source, the fact ids are merged into the target's
+        entry. Empty plan or no merged pages → original plan returned
+        unchanged so the common case stays cheap.
+        """
+        if not plan:
+            return plan
+        try:
+            pages = await self._page_store.list_pages(channel_id, target_lang=target_lang)
+        except Exception:  # noqa: BLE001 — best-effort
+            logger.exception("event=wiki_merge_redirect_load_failed channel_id=%s", channel_id)
+            return plan
+        # ``page_id → target_slug`` redirect, keyed by either page_id or
+        # slug since plan entries can be either depending on the routing
+        # rule that produced them.
+        redirect: dict[str, str] = {}
+        slug_to_page_id: dict[str, str] = {}
+        for page in pages:
+            slug = page.slug or page.page_id.replace(":", "-")
+            slug_to_page_id[slug] = page.page_id
+            if page.merged_into:
+                redirect[page.page_id] = page.merged_into
+                redirect[slug] = page.merged_into
+        if not redirect:
+            return plan
+        out: dict[str, list[str]] = {}
+        for source_key, fact_ids in plan.items():
+            target_slug = redirect.get(source_key)
+            if not target_slug:
+                out.setdefault(source_key, []).extend(fact_ids)
+                continue
+            # Translate target_slug back into a page_id when one exists,
+            # so apply_update's existing page_id-keyed lookups still
+            # resolve. If the target page is missing entirely (rare —
+            # operator merged into a target that was deleted out-of-band),
+            # fall back to the slug as-is.
+            target_page_id = slug_to_page_id.get(target_slug, target_slug)
+            out.setdefault(target_page_id, []).extend(fact_ids)
+        # Dedupe fact_ids per target so a fact that hit both the source
+        # and the target naturally is counted once.
+        return {page_id: list(dict.fromkeys(fact_ids)) for page_id, fact_ids in out.items()}
+
+    async def _record_merge_proposals(
+        self,
+        *,
+        channel_id: str,
+        target_lang: str,
+    ) -> None:
+        """Surface high-Jaccard page pairs as ``wiki_merge_proposals`` rows.
+
+        Threshold lives in ``Settings.wiki_page_merge_threshold`` (default
+        0.70). Proposals are idempotent on
+        ``(channel_id, target_lang, source_slug, target_slug)`` so the
+        same pair surfacing on every event handler tick does not
+        compound. The collection handle comes from the configured
+        Mongo store; the helper is a no-op when the store does not
+        expose one (test fakes typically don't).
+        """
+        from beever_atlas.infra.config import get_settings
+
+        try:
+            from beever_atlas.stores import get_stores
+        except Exception:  # noqa: BLE001 — testing without app stores
+            return
+        try:
+            stores = get_stores()
+        except Exception:  # noqa: BLE001 — singleton not initialised in tests
+            return
+        proposals_collection = getattr(stores.mongodb, "wiki_merge_proposals", None)
+        if proposals_collection is None:
+            return
+        threshold = float(getattr(get_settings(), "wiki_page_merge_threshold", 0.70))
+        candidates = await self._page_store.find_merge_candidates(
+            channel_id, threshold=threshold, target_lang=target_lang
+        )
+        now = datetime.now(tz=UTC).isoformat()
+        for source_slug, target_slug, jaccard in candidates:
+            doc = {
+                "channel_id": channel_id,
+                "target_lang": target_lang,
+                "source_slug": source_slug,
+                "target_slug": target_slug,
+                "jaccard": jaccard,
+                "status": "open",
+                "surfaced_at": now,
+            }
+            try:
+                await proposals_collection.update_one(
+                    {
+                        "channel_id": channel_id,
+                        "target_lang": target_lang,
+                        "source_slug": source_slug,
+                        "target_slug": target_slug,
+                    },
+                    {
+                        "$setOnInsert": {**doc, "created_at": now},
+                        "$set": {"jaccard": jaccard, "surfaced_at": now},
+                    },
+                    upsert=True,
+                )
+            except Exception:  # noqa: BLE001 — single-pair failure logged + skipped
+                logger.exception(
+                    "event=wiki_merge_proposal_upsert_failed channel_id=%s source=%s target=%s",
+                    channel_id,
+                    source_slug,
+                    target_slug,
+                )
 
     async def _invoke_kind_dispatch_with_retry(
         self,

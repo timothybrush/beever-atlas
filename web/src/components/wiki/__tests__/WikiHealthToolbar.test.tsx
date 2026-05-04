@@ -86,6 +86,13 @@ function renderToolbar(
     onHistoryToggle: () => void;
     onRegenerate: () => void;
     isRegenerating: boolean;
+    activeSlug: string;
+    activePagePinned: boolean;
+    activePageHidden: boolean;
+    onPinToggle: (pinned: boolean) => void;
+    onHideToggle: (hidden: boolean) => void;
+    onSplit: (title: string) => void;
+    onMerge: (slug: string) => void;
   }> = {},
 ) {
   return render(
@@ -98,6 +105,13 @@ function renderToolbar(
       onHistoryToggle={props.onHistoryToggle}
       onRegenerate={props.onRegenerate}
       isRegenerating={props.isRegenerating ?? false}
+      activeSlug={props.activeSlug}
+      activePagePinned={props.activePagePinned}
+      activePageHidden={props.activePageHidden}
+      onPinToggle={props.onPinToggle}
+      onHideToggle={props.onHideToggle}
+      onSplit={props.onSplit}
+      onMerge={props.onMerge}
     />,
   );
 }
@@ -400,5 +414,131 @@ describe("WikiHealthToolbar — Lint findings panel", () => {
     await waitFor(() => {
       expect(screen.getByText(/no issues/i)).toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §5.15 / §5.16 — curation menu items
+// ---------------------------------------------------------------------------
+
+describe("WikiHealthToolbar — curation items (§5.15 / §5.16)", () => {
+  it("does NOT render Pin/Hide/Split/Merge when no activeSlug", async () => {
+    renderToolbar({});
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.queryByRole("menuitem", { name: /^Pin/i })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^Hide/i })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^Split/i })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /^Merge/i })).toBeNull();
+  });
+
+  it("renders all four curation items when activeSlug is set", async () => {
+    renderToolbar({
+      activeSlug: "topic-auth",
+      onPinToggle: vi.fn(),
+      onHideToggle: vi.fn(),
+      onSplit: vi.fn(),
+      onMerge: vi.fn(),
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /Pin this page/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitem", { name: /Hide this page/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Split this page/i })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Merge another page/i })).toBeInTheDocument();
+  });
+
+  it("Pin click fires onPinToggle(true) and item label flips when pinned=true", async () => {
+    const onPinToggle = vi.fn();
+    const { rerender } = renderToolbar({
+      activeSlug: "topic-auth",
+      activePagePinned: false,
+      onPinToggle,
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /Pin this page/i }));
+    expect(onPinToggle).toHaveBeenCalledTimes(1);
+    expect(onPinToggle).toHaveBeenCalledWith(true);
+
+    // Re-render with pinned=true and verify the label flipped to Unpin.
+    rerender(
+      <WikiHealthToolbar
+        channelId="ch-1"
+        manualMode
+        activeSlug="topic-auth"
+        activePagePinned={true}
+        onPinToggle={onPinToggle}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /Unpin this page/i })).toBeInTheDocument();
+  });
+
+  it("Hide click fires onHideToggle(true) and label flips when hidden=true", async () => {
+    const onHideToggle = vi.fn();
+    const { rerender } = renderToolbar({
+      activeSlug: "topic-auth",
+      activePageHidden: false,
+      onHideToggle,
+    });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /Hide this page/i }));
+    expect(onHideToggle).toHaveBeenCalledWith(true);
+
+    rerender(
+      <WikiHealthToolbar
+        channelId="ch-1"
+        manualMode
+        activeSlug="topic-auth"
+        activePageHidden={true}
+        onHideToggle={onHideToggle}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /Show this page/i })).toBeInTheDocument();
+  });
+
+  it("Split click opens the split modal; Confirm fires onSplit", async () => {
+    const onSplit = vi.fn();
+    renderToolbar({ activeSlug: "topic-auth", onSplit });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /Split this page/i }));
+    const dialog = screen.getByRole("dialog", { name: /split wiki page/i });
+    expect(dialog).toBeInTheDocument();
+    const input = screen.getByLabelText(/new page title/i);
+    await user.type(input, "Auth — Session Policy");
+    await user.click(screen.getByRole("button", { name: /confirm split/i }));
+    expect(onSplit).toHaveBeenCalledWith("Auth — Session Policy");
+  });
+
+  it("Merge click opens the merge modal; Confirm fires onMerge", async () => {
+    const onMerge = vi.fn();
+    renderToolbar({ activeSlug: "topic-auth", onMerge });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /Merge another page/i }));
+    const dialog = screen.getByRole("dialog", { name: /merge wiki page/i });
+    expect(dialog).toBeInTheDocument();
+    const input = screen.getByLabelText(/source slug/i);
+    await user.type(input, "topic-auth-old");
+    await user.click(screen.getByRole("button", { name: /confirm merge/i }));
+    expect(onMerge).toHaveBeenCalledWith("topic-auth-old");
+  });
+
+  it("Confirm Split is disabled when title is empty (regression guard)", async () => {
+    const onSplit = vi.fn();
+    renderToolbar({ activeSlug: "topic-auth", onSplit });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    await user.click(screen.getByRole("menuitem", { name: /Split this page/i }));
+    const confirmBtn = screen.getByRole("button", { name: /confirm split/i });
+    expect(confirmBtn).toBeDisabled();
+    await user.click(confirmBtn);
+    expect(onSplit).not.toHaveBeenCalled();
   });
 });
