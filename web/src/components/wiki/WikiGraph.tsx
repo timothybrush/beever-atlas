@@ -167,17 +167,34 @@ function colorForNode(node: WikiGraphNode): string {
 
 // Pre-build elements with per-node color so the cytoscape style sheet
 // can reference data(color) directly — keeps the style block small.
+// Labels are truncated to ~28 chars to stop the outer ring from
+// overlapping into an unreadable crush — the full title is on the
+// preview panel + tooltip on hover, so the truncation is purely
+// visual relief.
+function _truncateLabel(raw: string, max = 28): string {
+  const s = (raw || "").trim();
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
+}
+
 function buildElements(filtered: WikiGraphPayload): unknown[] {
   const out: unknown[] = [];
   for (const node of filtered.nodes) {
     const isChannel = node.data.kind === "channel";
     const isEntity = node.data.kind === "entity";
+    const rawLabel = node.data.label || node.data.id;
     out.push({
       data: {
         ...node.data,
+        // Display label is truncated; the full ``label`` stays on the
+        // panel + Obsidian-style hover tooltip (cytoscape's text-show
+        // styling is driven by the visible-on-hover class added in
+        // the mouseover handler).
+        displayLabel: _truncateLabel(rawLabel),
         color: colorForNode(node),
-        nodeSize: isChannel ? 60 : isEntity ? 32 : 38,
-        labelSize: isChannel ? 14 : 11,
+        nodeSize: isChannel ? 64 : isEntity ? 30 : 36,
+        labelSize: isChannel ? 16 : 12,
+        labelWeight: isChannel ? 700 : 500,
       },
     });
   }
@@ -197,7 +214,11 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     touchedWithin: "all",
     minCitations: 0,
   });
-  const [layout, setLayout] = useState<LayoutKey>("concentric");
+  // Default to force-directed cose — Obsidian-style natural spacing
+  // distributes the outer-ring labels so they don't cram on top of
+  // each other. Operators who want the explicit hierarchy can switch
+  // to dagre or concentric from the dropdown.
+  const [layout, setLayout] = useState<LayoutKey>("cose");
   const containerRef = useRef<HTMLDivElement | null>(null);
   // ``unknown`` because cytoscape's type surface (Core, ElementDefinition)
   // adds a non-trivial type-import; the runtime methods we touch
@@ -219,7 +240,11 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     () => undefined,
   );
   handleNodeTapRef.current = useCallback((nodeData: Record<string, unknown>) => {
-    if (!nodeData) return;
+    // Empty data → background tap; clear selection.
+    if (!nodeData || !nodeData.id) {
+      setSelection(null);
+      return;
+    }
     const fakeNode: WikiGraphNode = { data: nodeData as WikiGraphNode["data"] };
     const sel = selectionFromNode(fakeNode);
     if (sel.isEntity) {
@@ -233,13 +258,7 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
       }
       return;
     }
-    if (sel.isChannel) {
-      // Channel hub click — show a brief panel describing the channel,
-      // no routing.
-      setSelection(sel);
-      return;
-    }
-    // Wiki node → open inline preview panel.
+    // Wiki nodes + channel hub → open inline preview panel.
     setSelection(sel);
   }, [channelId, navigate]);
 
@@ -250,12 +269,20 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
 
   useEffect(() => {
     let alive = true;
+    type CyTapEvent = {
+      target: {
+        id?: () => string;
+        data?: () => Record<string, unknown>;
+      };
+    };
     type CyInstance = {
-      on: (
-        event: string,
-        selector: string,
-        handler: (e: { target: { data: () => Record<string, unknown> } }) => void,
-      ) => void;
+      // Cytoscape's ``on`` is overloaded: 2-arg form (event, handler) for
+      // canvas-wide events, 3-arg form (event, selector, handler) for
+      // element-bound events. Both are valid runtime calls.
+      on: {
+        (event: string, handler: (e: CyTapEvent) => void): void;
+        (event: string, selector: string, handler: (e: CyTapEvent) => void): void;
+      };
       destroy: () => void;
     };
     let cy: CyInstance | null = null;
@@ -275,22 +302,24 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
             {
               selector: "node",
               style: {
-                label: "data(label)",
+                label: "data(displayLabel)",
                 "text-valign": "bottom",
                 "text-halign": "center",
                 "text-margin-y": 6,
-                color: "#cbd5e1",
+                color: "#e5e7eb",
                 "font-size": "data(labelSize)",
-                "font-weight": 500,
+                "font-weight": "data(labelWeight)",
                 "text-wrap": "wrap",
-                "text-max-width": "120px",
+                "text-max-width": "140px",
+                "text-outline-color": "#0f172a",
+                "text-outline-width": 2,
                 "background-color": "data(color)",
                 width: "data(nodeSize)",
                 height: "data(nodeSize)",
                 "border-width": 1.5,
                 "border-color": "rgba(255,255,255,0.15)",
                 "transition-property":
-                  "background-color, border-color, width, height",
+                  "background-color, border-color, width, height, opacity",
                 "transition-duration": 150,
               },
             },
@@ -298,9 +327,27 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               selector: "node[kind = 'channel']",
               style: {
                 "border-width": 3,
-                "border-color": "rgba(168,85,247,0.5)",
-                "font-weight": 700,
+                "border-color": "rgba(168,85,247,0.6)",
                 color: "#f3e8ff",
+              },
+            },
+            {
+              selector: "node.dimmed",
+              style: { opacity: 0.25 },
+            },
+            {
+              selector: "node.highlighted",
+              style: {
+                "border-width": 3,
+                "border-color": "#fbbf24",
+                "z-index": 999,
+              },
+            },
+            {
+              selector: "node.neighbor",
+              style: {
+                "border-width": 2,
+                "border-color": "#facc15",
               },
             },
             {
@@ -319,6 +366,18 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
                 "target-arrow-shape": "triangle",
                 "curve-style": "bezier",
                 "arrow-scale": 0.8,
+                "transition-property": "line-color, opacity, width",
+                "transition-duration": 150,
+              },
+            },
+            { selector: "edge.dimmed", style: { opacity: 0.1 } },
+            {
+              selector: "edge.highlighted",
+              style: {
+                width: 2.5,
+                "line-color": "#facc15",
+                "target-arrow-color": "#facc15",
+                "z-index": 999,
               },
             },
             {
@@ -360,8 +419,9 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               ? {
                   name: "concentric",
                   fit: true,
-                  padding: 50,
-                  minNodeSpacing: 28,
+                  padding: 60,
+                  minNodeSpacing: 80,
+                  spacingFactor: 1.4,
                   // Channel hub at center, then top-level pages, then deeper.
                   concentric: (node: { data: (k: string) => unknown }) => {
                     const kind = node.data("kind");
@@ -375,13 +435,86 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
                   animate: false,
                 }
               : layout === "dagre"
-                ? { name: "dagre", rankDir: "TB", animate: false }
+                ? {
+                    name: "dagre",
+                    rankDir: "TB",
+                    animate: false,
+                    nodeSep: 70,
+                    edgeSep: 30,
+                    rankSep: 100,
+                  }
                 : layout === "grid"
-                  ? { name: "grid", animate: false }
-                  : { name: "cose", animate: false },
+                  ? { name: "grid", animate: false, padding: 40 }
+                  : {
+                      name: "cose",
+                      animate: false,
+                      // Generous spring length + vertex repulsion so the
+                      // 60+ wiki nodes spread out instead of crushing
+                      // labels into each other.
+                      idealEdgeLength: 140,
+                      nodeOverlap: 24,
+                      nodeRepulsion: 8_000_000,
+                      edgeElasticity: 60,
+                      gravity: 0.15,
+                      padding: 60,
+                      fit: true,
+                    },
         });
+        // Click — Obsidian-style: highlight the clicked node + its
+        // direct neighbors, dim the rest, fire selection callback.
+        const cyAny = cy as unknown as {
+          elements: () => {
+            removeClass: (c: string) => void;
+            addClass: (c: string) => void;
+          };
+          getElementById: (id: string) => {
+            length: number;
+            data: () => Record<string, unknown>;
+            closedNeighborhood: () => {
+              removeClass: (c: string) => void;
+              addClass: (c: string) => void;
+              edges: () => { addClass: (c: string) => void };
+            };
+          };
+        };
+        const clearHighlights = () => {
+          cyAny.elements().removeClass("dimmed highlighted neighbor");
+        };
         cy.on("tap", "node", (e) => {
-          handleNodeTapRef.current(e.target.data());
+          const evtTarget = (e as unknown as {
+            target: {
+              id: () => string;
+              data: () => Record<string, unknown>;
+              closedNeighborhood: () => {
+                removeClass: (c: string) => void;
+                addClass: (c: string) => void;
+                edges: () => { addClass: (c: string) => void };
+              };
+            };
+          }).target;
+          const nodeId = evtTarget.id();
+          const nodeData = evtTarget.data();
+          // Visual highlight pass — same pattern as the entity GraphCanvas.
+          cyAny.elements().removeClass("dimmed highlighted neighbor");
+          cyAny.elements().addClass("dimmed");
+          const neighborhood = evtTarget.closedNeighborhood();
+          neighborhood.removeClass("dimmed");
+          neighborhood.addClass("neighbor");
+          neighborhood.edges().addClass("highlighted");
+          // Mark the clicked node itself with the brighter "highlighted" class.
+          const ele = cyAny.getElementById(nodeId);
+          if (ele.length > 0) {
+            ele.closedNeighborhood().removeClass("dimmed");
+          }
+          handleNodeTapRef.current(nodeData);
+        });
+        // Background tap clears the selection + highlights.
+        cy.on("tap", (e) => {
+          const evtTarget = (e as unknown as { target: unknown }).target;
+          if (evtTarget === cy) {
+            clearHighlights();
+            handleNodeTapRef.current({});
+          }
         });
         cyRef.current = cy;
         setCytoscapeReady(true);
@@ -589,7 +722,7 @@ function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) 
 
   return (
     <aside
-      className="w-80 shrink-0 border-l border-border bg-card overflow-y-auto"
+      className="w-80 shrink-0 border-l border-border bg-card/95 overflow-y-auto shadow-2xl backdrop-blur-sm"
       role="complementary"
       aria-label="Wiki graph node details"
       data-testid="wiki-graph-panel"
