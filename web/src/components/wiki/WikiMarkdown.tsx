@@ -6,6 +6,7 @@ import { MermaidBlock } from "./MermaidBlock";
 import { ChartBlock } from "./ChartBlock";
 import { CalloutBox } from "./CalloutBox";
 import { CitationLink } from "./CitationLink";
+import { WikiLink } from "./WikiLink";
 import { buildLoaderUrl } from "@/lib/api";
 import { ProxiedImage } from "@/components/common/ProxiedImage";
 import type { WikiCitation } from "@/lib/types";
@@ -51,6 +52,15 @@ interface WikiMarkdownProps {
   content: string;
   citations?: WikiCitation[];
   onNavigate?: (pageId: string) => void;
+  /** Resolved `[[wikilink]]` references for this page — `{title: slug}`.
+   * Resolution happens server-side at apply_update time; the renderer
+   * just looks up the title and emits an anchor.  Undefined / empty
+   * means every bracketed reference falls into the broken-link path. */
+  crossLinks?: Record<string, string>;
+  /** Titles inside `[[...]]` that did NOT resolve. The renderer styles
+   * them with a red dashed underline and clicking opens a "create
+   * page?" affordance. */
+  crossLinksBroken?: string[];
 }
 
 /**
@@ -77,6 +87,17 @@ function preprocessContent(content: string): string {
 
   let result = processed.join("");
 
+  // [[Page Title]] wikilinks \u2192 marker. MUST run before the citation
+  // pass so a numeric-only title (rare but legal) doesn't get eaten by
+  // the [N] regex.  ``encodeURIComponent`` is used as the in-band
+  // escape so titles can carry colons / brackets / unicode without
+  // colliding with the marker delimiter.
+  result = result.replace(/\[\[([^\[\]\n]+?)\]\]/g, (_match, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return _match;
+    return `\u200Bwl:${encodeURIComponent(trimmed)}\u200B`;
+  });
+
   // Replace comma-separated citations like [1, 3, 13] with individual markers
   result = result.replace(/\[([\d,\s]+)\]/g, (_match, inner: string) => {
     const nums = inner.split(",").map(s => s.trim()).filter(s => /^\d+$/.test(s));
@@ -88,16 +109,26 @@ function preprocessContent(content: string): string {
   return result;
 }
 
+interface MarkerContext {
+  citations: WikiCitation[];
+  crossLinks: Record<string, string>;
+  crossLinksBroken: Set<string>;
+}
+
 /**
- * Process text to render citation markers as interactive CitationLink components.
+ * Process text to render citation + wikilink markers as components.
+ *
+ * Pattern union \u2014 order does NOT matter for correctness because the
+ * markers carry distinct prefixes (`cite:` vs `wl:`); we run both in
+ * one pass to preserve key uniqueness across the original text span.
  */
 function processText(
   text: string,
-  citations: WikiCitation[],
+  ctx: MarkerContext,
   keyPrefix: string,
 ): ReactNode[] {
   const parts: ReactNode[] = [];
-  const pattern = /\u200Bcite:(\d+)\u200B/g;
+  const pattern = /\u200B(cite:(\d+)|wl:([^\u200B]+))\u200B/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -105,10 +136,27 @@ function processText(
     if (match.index > lastIndex) {
       parts.push(text.slice(lastIndex, match.index));
     }
-    const idx = parseInt(match[1], 10);
-    parts.push(
-      <CitationLink key={`${keyPrefix}-${match.index}`} index={idx} citation={citations[idx - 1]} />,
-    );
+    if (match[2] !== undefined) {
+      const idx = parseInt(match[2], 10);
+      parts.push(
+        <CitationLink
+          key={`${keyPrefix}-c-${match.index}`}
+          index={idx}
+          citation={ctx.citations[idx - 1]}
+        />,
+      );
+    } else if (match[3] !== undefined) {
+      const title = decodeURIComponent(match[3]);
+      const slug = ctx.crossLinks[title];
+      const isBroken = !slug || ctx.crossLinksBroken.has(title);
+      parts.push(
+        <WikiLink
+          key={`${keyPrefix}-wl-${match.index}`}
+          title={title}
+          slug={isBroken ? undefined : slug}
+        />,
+      );
+    }
     lastIndex = pattern.lastIndex;
   }
 
@@ -120,24 +168,24 @@ function processText(
 }
 
 /**
- * Walk React children tree and process all text nodes for citations.
+ * Walk React children tree and process all text nodes for citations + wikilinks.
  */
 function processChildren(
   children: ReactNode,
-  citations: WikiCitation[],
+  ctx: MarkerContext,
   keyPrefix = "c",
 ): ReactNode {
   if (typeof children === "string") {
-    const parts = processText(children, citations, keyPrefix);
+    const parts = processText(children, ctx, keyPrefix);
     return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>;
   }
   if (Array.isArray(children)) {
-    return <>{children.map((child, i) => processChildren(child, citations, `${keyPrefix}-${i}`))}</>;
+    return <>{children.map((child, i) => processChildren(child, ctx, `${keyPrefix}-${i}`))}</>;
   }
   if (children && typeof children === "object" && "props" in (children as object)) {
     const el = children as React.ReactElement<{ children?: ReactNode }>;
     if (el.props?.children != null) {
-      const processed = processChildren(el.props.children, citations, `${keyPrefix}-el`);
+      const processed = processChildren(el.props.children, ctx, `${keyPrefix}-el`);
       const { children: _, ...rest } = el.props;
       return { ...el, props: { ...rest, children: processed } };
     }
@@ -272,9 +320,22 @@ function WikiPdfLink({ href, title }: { href: string; title: string }) {
   );
 }
 
-export function WikiMarkdown({ content, citations = [], onNavigate: _onNavigate }: WikiMarkdownProps) {
+export function WikiMarkdown({
+  content,
+  citations = [],
+  onNavigate: _onNavigate,
+  crossLinks = {},
+  crossLinksBroken = [],
+}: WikiMarkdownProps) {
   const processed = preprocessContent(content);
-  const ci = citations; // capture for closures
+  // Bundle the marker-resolution state for `processChildren` so we can
+  // pass it through every component-renderer closure without recreating
+  // it per call.
+  const ci: MarkerContext = {
+    citations,
+    crossLinks,
+    crossLinksBroken: new Set(crossLinksBroken),
+  };
 
   return (
     <ReactMarkdown

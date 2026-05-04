@@ -337,10 +337,14 @@ class WikiPage(BaseModel):
     ``content_md`` is still trustworthy; only the structured surface
     is missing."""
 
-    cross_links: list[str] = Field(default_factory=list)
-    """Slugs of other wiki pages this page references via
-    ``[[wikilink]]`` syntax. Resolved at maintainer time so the
-    renderer doesn't run N fuzzy matches per page render."""
+    cross_links: dict[str, str] = Field(default_factory=dict)
+    """Title → slug mapping for ``[[wikilink]]`` references this page
+    contains. Resolved at maintainer time so the renderer doesn't run
+    N fuzzy matches per page render — the frontend just looks up the
+    bracketed title and emits a clickable anchor to the slug.
+    ``dict`` rather than ``list[str]`` so the renderer carries the
+    same title the LLM emitted; no extra API call is needed to
+    materialize the link text."""
 
     cross_links_broken: list[str] = Field(default_factory=list)
     """Titles inside ``[[...]]`` that did NOT resolve to an existing

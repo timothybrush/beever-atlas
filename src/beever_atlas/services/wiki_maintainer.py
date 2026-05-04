@@ -50,9 +50,7 @@ logger = logging.getLogger(__name__)
 # Kinds the redesign knows how to dispatch. Anything else falls through to
 # the legacy single-prompt path so unknown future kinds (or operator-edited
 # `kind` values) never crash the maintainer.
-_KNOWN_KINDS: frozenset[str] = frozenset(
-    {"topic", "entity", "decisions", "faq", "action_items"}
-)
+_KNOWN_KINDS: frozenset[str] = frozenset({"topic", "entity", "decisions", "faq", "action_items"})
 
 # Resolve at import time so tests cannot trip on cwd changes.
 _WIKI_RESOURCE_ROOT: Path = Path(__file__).resolve().parent.parent / "wiki"
@@ -182,9 +180,7 @@ def _parse_kind_response(
     try:
         parsed = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        logger.warning(
-            "event=wiki_kind_response_parse_failed raw_len=%d", len(raw)
-        )
+        logger.warning("event=wiki_kind_response_parse_failed raw_len=%d", len(raw))
         return [], None
     if not isinstance(parsed, dict):
         return [], None
@@ -222,8 +218,7 @@ def _render_kind_prompt(
             "target_lang": target_lang,
             "last_facts_seen": list(page.last_facts_seen),
             "sections": [
-                {"id": s.id, "title": s.title, "content_md": s.content_md}
-                for s in page.sections
+                {"id": s.id, "title": s.title, "content_md": s.content_md} for s in page.sections
             ],
             "prior_kind_schema": page.kind_schema,
         },
@@ -239,11 +234,7 @@ def _render_kind_prompt(
             for f in new_facts
         ],
     }
-    out = (
-        system
-        + "\n\n--- INPUT ---\n"
-        + json.dumps(payload, ensure_ascii=False, indent=2)
-    )
+    out = system + "\n\n--- INPUT ---\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     if retry_validation_error:
         out += (
             "\n\n--- RETRY ---\n"
@@ -351,9 +342,7 @@ def _build_page_index(
     return index
 
 
-def _resolve_wikilink_against_index(
-    title: str, page_index: dict[str, str]
-) -> str | None:
+def _resolve_wikilink_against_index(title: str, page_index: dict[str, str]) -> str | None:
     """Resolve a wikilink title against a pre-built index.
 
     Match precedence: exact → lowercased → plural-stripped → fuzzy
@@ -915,22 +904,18 @@ class WikiMaintainer:
 
         settings = get_settings()
         dispatch_kind = _resolve_dispatch_kind(page)
-        use_kind_dispatch = (
-            settings.wiki_llm_native_redesign and dispatch_kind in _KNOWN_KINDS
-        )
+        use_kind_dispatch = settings.wiki_llm_native_redesign and dispatch_kind in _KNOWN_KINDS
 
         new_kind_schema: dict[str, Any] | None = None
         affected_sections: list[WikiPageSection]
         if use_kind_dispatch:
             try:
-                affected_sections, new_kind_schema = (
-                    await self._invoke_kind_dispatch_with_retry(
-                        channel_id=channel_id,
-                        page=page,
-                        new_facts=new_facts,
-                        kind=dispatch_kind,
-                        target_lang=target_lang,
-                    )
+                affected_sections, new_kind_schema = await self._invoke_kind_dispatch_with_retry(
+                    channel_id=channel_id,
+                    page=page,
+                    new_facts=new_facts,
+                    kind=dispatch_kind,
+                    target_lang=target_lang,
                 )
             except Exception as exc:  # noqa: BLE001 — leave page unchanged on any LLM error
                 logger.exception(
@@ -942,9 +927,7 @@ class WikiMaintainer:
                 self._record_apply_update_failure(channel_id, page_id, exc)
                 return False
         else:
-            prompt = _render_apply_update_prompt(
-                page, new_facts, target_lang=target_lang
-            )
+            prompt = _render_apply_update_prompt(page, new_facts, target_lang=target_lang)
             try:
                 raw = await self._invoke_apply_update_llm(prompt)
             except Exception as exc:  # noqa: BLE001 — leave page unchanged on any LLM error
@@ -960,8 +943,7 @@ class WikiMaintainer:
 
         if not affected_sections:
             logger.warning(
-                "event=wiki_maintainer_apply_update_no_affected_sections channel_id=%s "
-                "page_id=%s",
+                "event=wiki_maintainer_apply_update_no_affected_sections channel_id=%s page_id=%s",
                 channel_id,
                 page_id,
             )
@@ -1007,9 +989,16 @@ class WikiMaintainer:
         resolved_slugs: list[str] = []
         if use_kind_dispatch:
             try:
-                resolved_slugs, _broken = await self._persist_cross_links(
+                resolved_map, _broken = await self._persist_cross_links(
                     page, target_lang=target_lang
                 )
+                # Deduplicate slugs for the Neo4j edge upsert below — two
+                # titles can resolve to the same slug (synonym + canonical).
+                seen_slug: set[str] = set()
+                for slug in resolved_map.values():
+                    if slug not in seen_slug:
+                        seen_slug.add(slug)
+                        resolved_slugs.append(slug)
             except Exception:  # noqa: BLE001 — never destabilise apply_update
                 logger.exception(
                     "event=wiki_persist_cross_links_failed channel_id=%s page_id=%s",
@@ -1066,15 +1055,17 @@ class WikiMaintainer:
         self,
         page: "WikiPage",
         target_lang: str,
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[dict[str, str], list[str]]:
         """Parse and resolve every wikilink in ``page.sections``.
 
-        Mutates ``page.cross_links`` and ``page.cross_links_broken`` in
-        place; the caller is responsible for the subsequent ``save_page``
-        so resolution + persistence land in a single Mongo write. Returns
-        ``(resolved_slugs, broken_titles)`` for the Neo4j upsert call site.
-        Self-references are excluded from the index so a page never
-        cross-links to itself.
+        Mutates ``page.cross_links`` (a ``{title: slug}`` mapping) and
+        ``page.cross_links_broken`` (titles only) in place; the caller is
+        responsible for the subsequent ``save_page`` so resolution +
+        persistence land in a single Mongo write. Returns
+        ``(resolved_map, broken_titles)`` so the Neo4j upsert call site
+        can iterate the resolved slugs without re-extracting them from
+        the dict. Self-references are excluded from the index so a page
+        never cross-links to itself.
         """
         seen: set[str] = set()
         ordered_titles: list[str] = []
@@ -1084,20 +1075,15 @@ class WikiMaintainer:
                     seen.add(title)
                     ordered_titles.append(title)
         if not ordered_titles:
-            page.cross_links = []
+            page.cross_links = {}
             page.cross_links_broken = []
-            return [], []
+            return {}, []
 
-        all_pages = await self._page_store.list_pages(
-            page.channel_id, target_lang=target_lang
-        )
-        index = _build_page_index(
-            all_pages, exclude_self_page_id=page.page_id
-        )
+        all_pages = await self._page_store.list_pages(page.channel_id, target_lang=target_lang)
+        index = _build_page_index(all_pages, exclude_self_page_id=page.page_id)
 
-        resolved: list[str] = []
+        resolved: dict[str, str] = {}
         broken: list[str] = []
-        seen_resolved: set[str] = set()
         seen_broken: set[str] = set()
         for title in ordered_titles:
             slug = _resolve_wikilink_against_index(title, index)
@@ -1105,9 +1091,11 @@ class WikiMaintainer:
                 if title not in seen_broken:
                     seen_broken.add(title)
                     broken.append(title)
-            elif slug not in seen_resolved:
-                seen_resolved.add(slug)
-                resolved.append(slug)
+            else:
+                # First occurrence wins for the title→slug mapping; if
+                # an LLM emits the same title twice (one with diacritics,
+                # one without) only the first one's resolution survives.
+                resolved.setdefault(title, slug)
 
         page.cross_links = resolved
         page.cross_links_broken = broken
@@ -1185,9 +1173,7 @@ class WikiMaintainer:
                 page,
                 new_facts,
                 target_lang=target_lang,
-                retry_validation_error=(
-                    last_validation_error if attempt == 1 else None
-                ),
+                retry_validation_error=(last_validation_error if attempt == 1 else None),
             )
             raw = await self._invoke_apply_update_llm(prompt)
             attempt_sections, attempt_schema = _parse_kind_response(raw)
@@ -1198,9 +1184,7 @@ class WikiMaintainer:
             affected_sections = attempt_sections
 
             if attempt_schema is None:
-                last_validation_error = (
-                    "response missing or non-object kind_schema"
-                )
+                last_validation_error = "response missing or non-object kind_schema"
                 continue
             error = _validate_kind_schema(kind, attempt_schema)
             if error is None:
@@ -1208,8 +1192,7 @@ class WikiMaintainer:
             last_validation_error = error
 
         logger.warning(
-            "event=wiki_kind_schema_validation_failed channel_id=%s page_id=%s "
-            "kind=%s err=%s",
+            "event=wiki_kind_schema_validation_failed channel_id=%s page_id=%s kind=%s err=%s",
             channel_id,
             page.page_id,
             kind,

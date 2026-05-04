@@ -440,7 +440,7 @@ async def test_save_page_round_trips_redesign_fields() -> None:
             "decides": ["session-policy"],
             "contributes": ["RFC-42"],
         },
-        cross_links=["session-policy", "rfc-42"],
+        cross_links={"Session Policy": "session-policy", "RFC-42": "rfc-42"},
         cross_links_broken=["unknown-page"],
         pin_state={
             "pinned": True,
@@ -462,7 +462,10 @@ async def test_save_page_round_trips_redesign_fields() -> None:
         "decides": ["session-policy"],
         "contributes": ["RFC-42"],
     }
-    assert fetched.cross_links == ["session-policy", "rfc-42"]
+    assert fetched.cross_links == {
+        "Session Policy": "session-policy",
+        "RFC-42": "rfc-42",
+    }
     assert fetched.cross_links_broken == ["unknown-page"]
     assert fetched.pin_state["pinned"] is True
     assert fetched.pin_state["reason"] == "load-bearing — do not restructure"
@@ -492,7 +495,7 @@ async def test_save_page_defaults_redesign_fields_for_legacy_callers() -> None:
     assert fetched is not None
     assert fetched.kind == "topic"
     assert fetched.kind_schema is None
-    assert fetched.cross_links == []
+    assert fetched.cross_links == {}
     assert fetched.cross_links_broken == []
     assert fetched.pin_state == {
         "pinned": False,

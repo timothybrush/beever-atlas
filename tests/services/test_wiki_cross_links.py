@@ -161,19 +161,18 @@ async def test_persist_cross_links_resolved_and_broken_split_correctly() -> None
                 id="overview",
                 title="Overview",
                 content_md=(
-                    "Alice owns [[Authentication]] and proposed [[Logging Strategy]] "
-                    "(no page yet)."
+                    "Alice owns [[Authentication]] and proposed [[Logging Strategy]] (no page yet)."
                 ),
             )
         ],
     )
 
     resolved, broken = await maintainer._persist_cross_links(page, target_lang="en")
-    assert resolved == ["topic-auth"]
+    assert resolved == {"Authentication": "topic-auth"}
     assert broken == ["Logging Strategy"]
     # And the page object was mutated in place — the caller will save
     # both fields in one Mongo write.
-    assert page.cross_links == ["topic-auth"]
+    assert page.cross_links == {"Authentication": "topic-auth"}
     assert page.cross_links_broken == ["Logging Strategy"]
 
 
@@ -201,7 +200,7 @@ async def test_persist_cross_links_skips_self_reference() -> None:
     maintainer = WikiMaintainer(page_store=page_store)
 
     resolved, broken = await maintainer._persist_cross_links(self_page, target_lang="en")
-    assert resolved == []
+    assert resolved == {}
     # The title fails to resolve against any OTHER page → broken.
     assert broken == ["Authentication"]
 
@@ -232,7 +231,9 @@ async def test_persist_cross_links_dedupes_repeated_references() -> None:
         ],
     )
     resolved, broken = await maintainer._persist_cross_links(page, target_lang="en")
-    assert resolved == ["topic-auth"]  # deduped to one entry
+    # First-occurrence wins for the title→slug mapping; the same title
+    # repeated three times still becomes a single entry.
+    assert resolved == {"Authentication": "topic-auth"}
     assert broken == []
 
 
@@ -280,9 +281,7 @@ async def test_apply_update_writes_neo4j_reference_edge_for_resolved_link(
     graph_store.upsert_wiki_page_node = AsyncMock(return_value="node-1")
     graph_store.upsert_wiki_reference_edge = AsyncMock()
 
-    maintainer = WikiMaintainer(
-        page_store=page_store, graph_store=graph_store
-    )
+    maintainer = WikiMaintainer(page_store=page_store, graph_store=graph_store)
 
     async def _fake_load_facts(channel_id: str, ids: list[str]) -> list[dict[str, Any]]:
         return [
@@ -344,7 +343,7 @@ async def test_apply_update_writes_neo4j_reference_edge_for_resolved_link(
 
     # And the cross_links / cross_links_broken were persisted on the page.
     saved: WikiPage = page_store.save_page.call_args.args[0]
-    assert saved.cross_links == ["entity-alice"]
+    assert saved.cross_links == {"Alice": "entity-alice"}
     assert saved.cross_links_broken == []
 
 
@@ -364,19 +363,24 @@ async def test_apply_update_neo4j_failure_does_not_crash_apply_update(
     graph_store.upsert_wiki_page_node = AsyncMock(side_effect=RuntimeError("neo down"))
     graph_store.upsert_wiki_reference_edge = AsyncMock()
 
-    maintainer = WikiMaintainer(
-        page_store=page_store, graph_store=graph_store
-    )
+    maintainer = WikiMaintainer(page_store=page_store, graph_store=graph_store)
 
     async def _fake_load(channel_id: str, ids: list[str]) -> list[dict[str, Any]]:
-        return [{"id": "f1", "memory_text": "x", "cluster_id": "c", "entity_tags": [], "fact_type": "observation", "source_message_id": "m"}]
+        return [
+            {
+                "id": "f1",
+                "memory_text": "x",
+                "cluster_id": "c",
+                "entity_tags": [],
+                "fact_type": "observation",
+                "source_message_id": "m",
+            }
+        ]
 
     maintainer._load_facts = _fake_load  # type: ignore[method-assign]
 
     canned = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "body"}],
         "kind_schema": {
             "summary": "ok",
             "key_decisions": [],
@@ -416,14 +420,21 @@ async def test_apply_update_skips_neo4j_when_graph_store_is_none(
     maintainer = WikiMaintainer(page_store=page_store, graph_store=None)
 
     async def _fake_load(channel_id: str, ids: list[str]) -> list[dict[str, Any]]:
-        return [{"id": "f1", "memory_text": "x", "cluster_id": "c", "entity_tags": [], "fact_type": "observation", "source_message_id": "m"}]
+        return [
+            {
+                "id": "f1",
+                "memory_text": "x",
+                "cluster_id": "c",
+                "entity_tags": [],
+                "fact_type": "observation",
+                "source_message_id": "m",
+            }
+        ]
 
     maintainer._load_facts = _fake_load  # type: ignore[method-assign]
 
     canned = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "body"}],
         "kind_schema": {
             "summary": "ok",
             "key_decisions": [],
@@ -463,19 +474,24 @@ async def test_apply_update_flag_off_does_not_resolve_or_upsert(
     graph_store.upsert_wiki_page_node = AsyncMock()
     graph_store.upsert_wiki_reference_edge = AsyncMock()
 
-    maintainer = WikiMaintainer(
-        page_store=page_store, graph_store=graph_store
-    )
+    maintainer = WikiMaintainer(page_store=page_store, graph_store=graph_store)
 
     async def _fake_load(channel_id: str, ids: list[str]) -> list[dict[str, Any]]:
-        return [{"id": "f1", "memory_text": "x", "cluster_id": "c", "entity_tags": [], "fact_type": "observation", "source_message_id": "m"}]
+        return [
+            {
+                "id": "f1",
+                "memory_text": "x",
+                "cluster_id": "c",
+                "entity_tags": [],
+                "fact_type": "observation",
+                "source_message_id": "m",
+            }
+        ]
 
     maintainer._load_facts = _fake_load  # type: ignore[method-assign]
 
     legacy_payload = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "legacy body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "legacy body"}],
     }
 
     async def _stub_llm(prompt: str) -> str:
