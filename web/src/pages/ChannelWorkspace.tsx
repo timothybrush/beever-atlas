@@ -42,7 +42,7 @@ type TabPath = (typeof TAB_PATHS)[number];
 const TAB_LABELS: Record<TabPath, string> = {
   wiki: "Channel Wiki",
   memories: "Agent Memory",
-  messages: "Messages",
+  messages: "Source",
   "sync-history": "Sync History",
   settings: "Settings",
 };

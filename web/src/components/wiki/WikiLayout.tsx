@@ -24,6 +24,16 @@ interface WikiLayoutProps {
   onSelectVersion?: (versionNumber: number) => void;
   onBackToCurrent?: () => void;
   headerExtra?: ReactNode;
+  /** Optional primary view toggle (e.g. Pages | Graph). Rendered as a
+   *  full-width segmented control on its own row at the top of the
+   *  sidebar header so it doesn't compete with utility actions for
+   *  horizontal space. */
+  viewToggle?: ReactNode;
+  /** Optional small accessory rendered next to the WIKI label in the
+   *  meta row — typically a "?" info button explaining the toggle
+   *  options. Kept separate from `viewToggle` so it doesn't compete
+   *  for horizontal space inside the segmented control. */
+  headerExplainer?: ReactNode;
   /** BCP-47 tag of the language currently displayed. Shown as a chip in the
    *  sidebar header so users can see at a glance which rendering they're viewing. */
   currentLang?: string;
@@ -259,6 +269,8 @@ export function WikiLayout({
   onSelectVersion,
   onBackToCurrent,
   headerExtra,
+  viewToggle,
+  headerExplainer,
   currentLang,
   supportedLanguages,
   onRegenerateInLang,
@@ -319,33 +331,51 @@ export function WikiLayout({
         }`}
         style={{ ["--wiki-sidebar-w" as string]: `${sidebarWidth}px` }}
       >
-        <div className="p-4 pb-2 shrink-0">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5 min-w-0">
-              <h3 className="text-sm font-semibold text-foreground truncate">{wikiT(currentLang, "wiki")}</h3>
-              {currentLang && (
-                <span
-                  className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
-                  title={`Displaying wiki in ${currentLang.toUpperCase()}`}
-                >
-                  {currentLang.toUpperCase()}
-                </span>
-              )}
+        <div className="px-3 pt-3 pb-2 shrink-0 space-y-2">
+          {/* Row 1 — primary view toggle (Pages | Graph) goes full-width
+              at the top so it reads as the main sub-navigation. */}
+          {viewToggle && (
+            <div className="[&>div]:!w-full [&_button]:!flex-1 [&_button]:!justify-center">
+              {viewToggle}
             </div>
-            {headerExtra}
+          )}
+
+          {/* Row 2 — meta only: small WIKI label + lang chip + freshness
+              pill. No action buttons on this row — they were overflowing
+              the 270px sidebar when packed alongside the meta. */}
+          <div className="flex items-center gap-1.5 min-w-0">
+            <h3 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/65 shrink-0">
+              {wikiT(currentLang, "wiki")}
+            </h3>
+            {headerExplainer}
+            {currentLang && (
+              <span
+                className="shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary"
+                title={`Displaying wiki in ${currentLang.toUpperCase()}`}
+              >
+                {currentLang.toUpperCase()}
+              </span>
+            )}
+            <FreshnessBadge
+              isStale={structure.is_stale}
+              generatedAt={structure.generated_at}
+              onRefresh={onRefresh}
+              isRefreshing={isRefreshing}
+              showRefreshButton={false}
+              className="!text-[10px] !px-1.5 !py-0.5 ml-auto"
+              lang={currentLang}
+            />
           </div>
-          <FreshnessBadge
-            isStale={structure.is_stale}
-            generatedAt={structure.generated_at}
-            onRefresh={onRefresh}
-            isRefreshing={isRefreshing}
-            showRefreshButton={false}
-            className="mt-2"
+
+          {/* Row 3 — page search. The action toolbar (Tools dropdown)
+              moved to the sidebar footer so the header is now purely
+              nav + meta + search; actions live alongside Regenerate at
+              the bottom where the eye expects primary CTAs. */}
+          <WikiContentSearch
+            key={activePage.id}
+            contentRef={searchableContentRef}
             lang={currentLang}
           />
-          <div className="mt-2">
-            <WikiContentSearch key={activePage.id} contentRef={searchableContentRef} lang={currentLang} />
-          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <WikiSidebar
@@ -359,19 +389,32 @@ export function WikiLayout({
           />
         </div>
         <div className="shrink-0 border-t border-border/70 p-3">
-          {/* Primary action: Regenerate (with language picker). */}
-          {currentLang && supportedLanguages && onRegenerateInLang && (
-            <WikiRegenerateButton
-              currentLang={currentLang}
-              supportedLanguages={supportedLanguages}
-              isRefreshing={isRefreshing}
-              onRegenerate={onRefresh}
-              onRegenerateInLang={onRegenerateInLang}
-              size="md"
-              fullWidth
-              lang={currentLang}
-            />
-          )}
+          {/* Footer action zone:
+              - Regenerate (primary, flexes to fill)
+              - Tools (secondary, square icon button via headerExtra)
+              Tooltips inside the toolbar are clamped so they don't
+              bleed into the main content area to the right. */}
+          <div className="flex items-stretch gap-2 [&_[role=tooltip]]:!max-w-[200px]">
+            {currentLang && supportedLanguages && onRegenerateInLang && (
+              <div className="flex-1 min-w-0">
+                <WikiRegenerateButton
+                  currentLang={currentLang}
+                  supportedLanguages={supportedLanguages}
+                  isRefreshing={isRefreshing}
+                  onRegenerate={onRefresh}
+                  onRegenerateInLang={onRegenerateInLang}
+                  size="md"
+                  fullWidth
+                  lang={currentLang}
+                />
+              </div>
+            )}
+            {headerExtra && (
+              <div className="shrink-0 flex items-center">
+                {headerExtra}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

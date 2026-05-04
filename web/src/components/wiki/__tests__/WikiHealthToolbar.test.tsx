@@ -139,14 +139,18 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("WikiHealthToolbar — manualMode", () => {
-  it("shows Maintain Wiki button when manualMode=true", () => {
+  it("shows Maintain Wiki menu item when manualMode=true", async () => {
     renderToolbar({ manualMode: true });
-    expect(screen.getByRole("button", { name: /maintain wiki/i })).toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /maintain wiki/i })).toBeInTheDocument();
   });
 
-  it("hides Maintain Wiki button when manualMode=false", () => {
+  it("hides Maintain Wiki menu item when manualMode=false", async () => {
     renderToolbar({ manualMode: false });
-    expect(screen.queryByRole("button", { name: /maintain wiki/i })).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.queryByRole("menuitem", { name: /maintain wiki/i })).not.toBeInTheDocument();
   });
 });
 
@@ -298,16 +302,20 @@ describe("WikiHealthToolbar — Tools menu", () => {
 // ---------------------------------------------------------------------------
 
 describe("WikiHealthToolbar — Maintain Wiki", () => {
-  it("has aria-label on Maintain Wiki button", () => {
+  it("has aria-label on Maintain Wiki menu item", async () => {
     renderToolbar({ manualMode: true });
-    const btn = screen.getByRole("button", { name: /maintain wiki/i });
-    expect(btn).toHaveAttribute("aria-label");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    const item = screen.getByRole("menuitem", { name: /maintain wiki/i });
+    expect(item).toHaveAttribute("aria-label");
   });
 
-  it("shows loading state while maintaining", () => {
+  it("disables Maintain Wiki menu item while maintaining", async () => {
     mockMaintainState.loading = true;
     renderToolbar({ manualMode: true });
-    expect(screen.getByRole("button", { name: /maintain wiki/i })).toBeDisabled();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
+    expect(screen.getByRole("menuitem", { name: /maintain wiki/i })).toBeDisabled();
   });
 
   it("shows maintain error with retry button", () => {

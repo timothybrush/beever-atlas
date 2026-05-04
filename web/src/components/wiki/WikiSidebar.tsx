@@ -1,8 +1,55 @@
-import { useState, useMemo } from "react";
-import { ChevronRight, ChevronDown, Folder } from "lucide-react";
+import { useState, useMemo, type ComponentType } from "react";
+import {
+  ChevronRight,
+  ChevronDown,
+  Folder,
+  BookOpen,
+  HelpCircle,
+  BookText,
+  Users,
+  Clock,
+  Library,
+  FileText,
+} from "lucide-react";
 import type { WikiPageNode } from "@/lib/types";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { wikiT } from "@/lib/wikiI18n";
+
+// Map a fixed-page slug/id to a recognizable icon. Fixed pages are
+// always-present sections like Overview, FAQ, Glossary, etc. Operators
+// scan for the icon faster than the numeric prefix that would
+// otherwise lead the row.
+type LucideIcon = ComponentType<{ className?: string; size?: number }>;
+
+// Renumber topic section_numbers for sidebar display.
+//
+// The wiki generator numbers Overview as "1", Topics as "2.X" (so 2.1,
+// 2.2, …, 2.21), then other fixed pages as "3", "4", "5", etc. Now that
+// fixed pages are rendered with icons (their section numbers don't
+// appear in the sidebar at all), the visible numeric column starts at
+// "2.1" — which reads oddly as "where's 1.X?". Strip the leading "2"
+// so topics display as 1.1, 1.2, …, 1.21 — the only numeric hierarchy
+// the operator sees.
+function displaySectionNumber(num: string): string {
+  if (!num) return num;
+  if (num === "2") return "1";
+  if (num.startsWith("2.")) return "1" + num.slice(1);
+  return num;
+}
+
+function iconForFixedPage(node: WikiPageNode): LucideIcon {
+  const key = (node.slug || node.id || "").toLowerCase();
+  if (key.includes("overview")) return BookOpen;
+  if (key.includes("faq")) return HelpCircle;
+  if (key.includes("glossary")) return BookText;
+  if (key.includes("people") || key.includes("expert") || key.includes("member"))
+    return Users;
+  if (key.includes("activity") || key.includes("recent") || key.includes("timeline"))
+    return Clock;
+  if (key.includes("resource") || key.includes("media") || key.includes("link"))
+    return Library;
+  return FileText;
+}
 
 interface WikiSidebarProps {
   pages: WikiPageNode[];
@@ -24,6 +71,12 @@ interface SidebarItemProps {
 function SidebarItem({ node, isActive, onClick, indent = 0, displayTitle }: SidebarItemProps) {
   const fullTitle = [node.section_number, node.title].filter(Boolean).join(" ");
   const shownTitle = displayTitle ?? node.title;
+  // Fixed pages (Overview, FAQ, Glossary, People & Experts, Recent
+  // Activity, Resources & Media) lead with a recognizable icon instead
+  // of a numeric prefix. The numeric structure is reserved for topics
+  // and sub-topics where it carries real semantic meaning (2.1, 2.21).
+  const isFixed = node.page_type === "fixed";
+  const FixedIcon = isFixed ? iconForFixedPage(node) : null;
 
   return (
     <Tooltip>
@@ -39,12 +92,18 @@ function SidebarItem({ node, isActive, onClick, indent = 0, displayTitle }: Side
             }`}
             style={{ paddingLeft: `${10 + indent * 14}px` }}
           >
-            {/* Section number leads — eye scans by number first. Single
-                tight row keeps the list scannable; the tooltip carries
-                the full title for any titles still ambiguous. */}
-            <span className="text-[11px] text-muted-foreground/80 font-mono font-semibold shrink-0 min-w-[2rem] tabular-nums">
-              {node.section_number}
-            </span>
+            {FixedIcon ? (
+              <span className="shrink-0 flex h-5 w-7 items-center justify-center text-muted-foreground/75">
+                <FixedIcon size={14} />
+              </span>
+            ) : (
+              /* Section number leads for topics — eye scans by number
+                 first. Tooltip carries the full title for ambiguous
+                 truncations. */
+              <span className="text-[11px] text-muted-foreground/80 font-mono font-semibold shrink-0 min-w-[2rem] tabular-nums">
+                {displaySectionNumber(node.section_number)}
+              </span>
+            )}
             <span className="truncate flex-1">{shownTitle}</span>
             {node.memory_count > 0 && (
               <span className="ml-auto text-[11px] text-muted-foreground/60 shrink-0 tabular-nums">

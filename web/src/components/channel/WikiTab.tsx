@@ -21,6 +21,10 @@ import { useChannelPolicy } from "@/hooks/useChannelPolicy";
 import { WikiLayout } from "@/components/wiki/WikiLayout";
 import { WikiHealthToolbar } from "@/components/wiki/WikiHealthToolbar";
 import { SegmentedToggle } from "@/components/shared/SegmentedToggle";
+import {
+  ViewExplainerButton,
+  type ExplainerSection,
+} from "@/components/shared/ViewExplainerButton";
 import { OverviewPage } from "@/components/wiki/OverviewPage";
 import { TopicPage } from "@/components/wiki/TopicPage";
 import { GenericPage } from "@/components/wiki/GenericPage";
@@ -38,8 +42,60 @@ interface LanguageConfig {
 type WikiView = "pages" | "graph";
 
 const WIKI_VIEW_OPTIONS = [
-  { value: "pages" as const, label: "Pages", icon: BookOpen, testId: "wiki-view-toggle-pages" },
-  { value: "graph" as const, label: "Graph", icon: Network, testId: "wiki-view-toggle-graph" },
+  { value: "pages" as const, label: "Wiki", icon: BookOpen, testId: "wiki-view-toggle-pages" },
+  { value: "graph" as const, label: "WikiGraph", icon: Network, testId: "wiki-view-toggle-graph" },
+];
+
+// Plain-English explanations surfaced via the ViewExplainerButton next
+// to the Wiki/WikiGraph toggle. Same pattern as the Memory tab so
+// operators get consistent help across surfaces.
+const WIKI_EXPLAINER_SECTIONS: ExplainerSection[] = [
+  {
+    title: "Wiki",
+    icon: BookOpen,
+    accent: "bg-primary/15 text-primary",
+    tagline: "Auto-generated, structured documentation of your channel.",
+    body: (
+      <>
+        <p>
+          Beever Atlas distills every message into a living wiki:
+          Overview, Topics, FAQ, Glossary, Decisions, and more — each
+          page synthesized by an LLM from the underlying memories so it
+          stays current as new conversations happen.
+        </p>
+        <p>
+          Pages cite their sources with{" "}
+          <code className="rounded bg-muted px-1 py-0.5 text-[12px]">
+            [[wikilinks]]
+          </code>{" "}
+          to other pages and footnote-style citations back to the
+          original messages. Use the search box to grep this page, the
+          tools menu to maintain or regenerate it.
+        </p>
+      </>
+    ),
+  },
+  {
+    title: "WikiGraph",
+    icon: Network,
+    accent: "bg-emerald-500/15 text-emerald-500",
+    tagline: "Visual map of how the wiki pages link together.",
+    body: (
+      <>
+        <p>
+          Every wiki page becomes a node, every cross-reference becomes
+          an edge. Pages cluster by kind (Topic, Decision, FAQ, Action
+          Item) so you can see the channel's structure at a glance and
+          spot orphan pages or dense topic islands.
+        </p>
+        <p>
+          Hover a node to highlight its neighborhood, click to preview
+          the page in a side panel, or double-click to jump straight
+          there.
+        </p>
+      </>
+    ),
+  },
 ];
 
 function WikiLoadingSkeleton() {
@@ -658,7 +714,12 @@ export function WikiTab() {
           />
         </div>
         <div className="flex-1 min-h-0">
-          <FullscreenWrapper label="Enlarge graph">
+          <FullscreenWrapper
+            label="Enlarge graph"
+            buttonPlacement="inline"
+            buttonAlign="left"
+            className="h-full"
+          >
             <Suspense
               fallback={
                 <div
@@ -834,25 +895,32 @@ export function WikiTab() {
       onRegenerateInLang={handleSwitchLang}
       versionHistoryOpen={versionHistoryOpen}
       onVersionHistoryToggle={() => setVersionHistoryOpen((v) => !v)}
+      viewToggle={
+        <SegmentedToggle
+          ariaLabel="Wiki view"
+          value={view}
+          options={WIKI_VIEW_OPTIONS}
+          onChange={setView}
+        />
+      }
+      headerExplainer={
+        <ViewExplainerButton
+          heading="How the wiki works"
+          sections={WIKI_EXPLAINER_SECTIONS}
+          triggerLabel="Learn what Wiki and WikiGraph mean"
+        />
+      }
       headerExtra={
-        <div className="flex items-center gap-2 flex-wrap justify-end">
-          <SegmentedToggle
-            ariaLabel="Wiki view"
-            value={view}
-            options={WIKI_VIEW_OPTIONS}
-            onChange={setView}
-          />
-          <WikiHealthToolbar
-            channelId={channelId!}
-            manualMode={manualMode}
-            onDownload={handleDownload}
-            onHistoryToggle={() => setVersionHistoryOpen((v) => !v)}
-            historyOpen={versionHistoryOpen}
-            versionCount={wiki?.version_count ?? 0}
-            onRegenerate={handleRefresh}
-            isRegenerating={isRefreshing}
-          />
-        </div>
+        <WikiHealthToolbar
+          channelId={channelId!}
+          manualMode={manualMode}
+          onDownload={handleDownload}
+          onHistoryToggle={() => setVersionHistoryOpen((v) => !v)}
+          historyOpen={versionHistoryOpen}
+          versionCount={wiki?.version_count ?? 0}
+          onRegenerate={handleRefresh}
+          isRegenerating={isRefreshing}
+        />
       }
     >
       <>

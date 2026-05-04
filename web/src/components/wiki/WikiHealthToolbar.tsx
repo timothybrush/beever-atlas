@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
-  ChevronDown,
   ClipboardCheck,
   Download,
   Eye,
@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import { useWikiLint } from "@/hooks/useWikiLint";
 import { useWikiMaintain } from "@/hooks/useWikiMaintain";
-import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { FailedBatchPanel } from "@/components/wiki/FailedBatchPanel";
 
 interface Props {
@@ -77,6 +76,12 @@ const SEVERITY_STYLES = {
 const TOOL_BTN =
   "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-xs font-medium transition-colors hover:bg-muted text-foreground";
 
+// Two-line tool item: short title on top, one-line description under.
+// Used for Maintain Wiki and Lint Wiki — operations whose names alone
+// don't tell the operator what they do.
+const TOOL_BTN_DESCRIBED =
+  "flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-muted text-foreground";
+
 /**
  * Wiki health toolbar — primary action + collapsible Tools menu.
  *
@@ -124,7 +129,40 @@ export function WikiHealthToolbar({
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergeSlug, setMergeSlug] = useState("");
   const toolsRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  // Portal positioning: when the menu opens, measure the trigger's
+  // viewport rect so we can render the menu in document.body without
+  // being clipped by any ancestor with overflow:hidden. The dropdown
+  // anchors to the LEFT side of the trigger and opens UPWARD into the
+  // dark area between the sidebar and the main content.
+  const [menuPos, setMenuPos] = useState<{ left: number; bottom: number } | null>(null);
   const showCurationItems = !!activeSlug;
+
+  useLayoutEffect(() => {
+    if (!toolsOpen) {
+      setMenuPos(null);
+      return;
+    }
+    const updatePos = () => {
+      const el = triggerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // Anchor menu's bottom to trigger's top (open UPWARD), and
+      // align right edge of menu to right edge of trigger so it stays
+      // close to the action.
+      setMenuPos({
+        left: rect.right + 8,
+        bottom: window.innerHeight - rect.bottom,
+      });
+    };
+    updatePos();
+    window.addEventListener("resize", updatePos);
+    window.addEventListener("scroll", updatePos, true);
+    return () => {
+      window.removeEventListener("resize", updatePos);
+      window.removeEventListener("scroll", updatePos, true);
+    };
+  }, [toolsOpen]);
 
   // Close everything on Escape
   useEffect(() => {
@@ -150,11 +188,20 @@ export function WikiHealthToolbar({
     return () => window.removeEventListener("keydown", onKey);
   }, [reportOpen, failuresOpen, toolsOpen, splitOpen, mergeOpen]);
 
-  // Close Tools menu on outside click
+  // Close Tools menu on outside click. The menu is portal'd into
+  // document.body so a click on a menu item registers as outside
+  // ``toolsRef``; we exempt anything carrying the
+  // ``data-wiki-tools-menu`` marker so portal'd children don't trigger
+  // the close before their own onClick handler fires.
   useEffect(() => {
     if (!toolsOpen) return;
     const onClick = (e: MouseEvent) => {
-      if (toolsRef.current && !toolsRef.current.contains(e.target as Node)) {
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      const insideTrigger =
+        toolsRef.current && toolsRef.current.contains(target);
+      const insideMenu = !!target.closest("[data-wiki-tools-menu]");
+      if (!insideTrigger && !insideMenu) {
         setToolsOpen(false);
         setConfirmRegenerate(false);
       }
@@ -172,38 +219,13 @@ export function WikiHealthToolbar({
 
   return (
     <div className="flex flex-wrap items-center gap-2 justify-end">
-      {/* Primary CTA: Maintain Wiki — only in manual mode */}
-      {manualMode && (
-        <Tooltip>
-          <TooltipTrigger
-            aria-label="Maintain Wiki — re-run the maintainer on pages flagged dirty since the last run"
-            onClick={() => maintain.maintain()}
-            disabled={maintain.loading || !channelId}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-          >
-            {maintain.loading ? (
-              <Loader2 size={12} className="animate-spin" />
-            ) : (
-              <Sparkles size={12} />
-            )}
-            {maintain.loading ? "Maintaining..." : "Maintain Wiki"}
-            {maintain.result && maintain.result.rewritten > 0 && (
-              <span className="text-muted-foreground">({maintain.result.rewritten})</span>
-            )}
-          </TooltipTrigger>
-          <TooltipContent>
-            Re-run the WikiMaintainer on all dirty pages. See{" "}
-            <a href="/docs/integrations/openclaw.md" className="underline" target="_blank" rel="noreferrer">
-              integration cookbook
-            </a>{" "}
-            for details.
-          </TooltipContent>
-        </Tooltip>
-      )}
-
-      {/* Tools dropdown */}
+      {/* Tools dropdown — square icon trigger so it sits cleanly next
+          to the Regenerate button in the sidebar footer. Menu opens
+          UPWARD because the trigger lives at the bottom of the sidebar
+          and a downward menu would be clipped by the viewport. */}
       <div ref={toolsRef} className="relative">
         <button
+          ref={triggerRef}
           type="button"
           aria-label="Wiki tools menu"
           aria-haspopup="true"
@@ -212,23 +234,67 @@ export function WikiHealthToolbar({
             setToolsOpen((v) => !v);
             setConfirmRegenerate(false);
           }}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted transition-colors whitespace-nowrap"
+          className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border/60 bg-background text-foreground hover:bg-muted hover:border-border transition-colors"
+          title="Wiki tools"
         >
-          <Wrench size={12} />
-          Tools
-          <ChevronDown
-            size={11}
-            className={`transition-transform ${toolsOpen ? "rotate-180" : ""}`}
-          />
+          <Wrench size={14} />
         </button>
 
-        {toolsOpen && (
+        {toolsOpen && menuPos && createPortal(
           <div
             role="menu"
             aria-label="Wiki tools"
-            className="absolute right-0 top-full mt-1.5 z-50 w-52 rounded-xl border border-border bg-popover p-1 shadow-xl"
+            data-wiki-tools-menu="true"
+            style={{
+              position: "fixed",
+              left: `${menuPos.left}px`,
+              bottom: `${menuPos.bottom}px`,
+            }}
+            className="z-[60] w-72 rounded-xl border border-border bg-popover p-1 shadow-2xl max-h-[70vh] overflow-y-auto"
           >
-            {/* Lint Wiki */}
+            {/* Maintain Wiki — described top item, only in manual mode.
+                Was previously a separate button outside the dropdown;
+                folded in here so the header keeps a single Tools button
+                and operators see context for what "Maintain" means. */}
+            {manualMode && (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setToolsOpen(false);
+                  maintain.maintain();
+                }}
+                disabled={maintain.loading || !channelId}
+                className={TOOL_BTN_DESCRIBED + " disabled:opacity-50 disabled:cursor-not-allowed"}
+                aria-label="Maintain Wiki — re-run the maintainer on pages flagged dirty since the last run"
+              >
+                <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary shrink-0">
+                  {maintain.loading ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={12} />
+                  )}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-xs font-semibold text-foreground">
+                      {maintain.loading ? "Maintaining…" : "Maintain Wiki"}
+                    </span>
+                    {maintain.result && maintain.result.rewritten > 0 && (
+                      <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary tabular-nums">
+                        +{maintain.result.rewritten}
+                      </span>
+                    )}
+                  </span>
+                  <span className="block text-[11px] text-muted-foreground leading-snug mt-0.5">
+                    Re-run the maintainer on pages updated since the last pass.
+                  </span>
+                </span>
+              </button>
+            )}
+
+            {/* Lint Wiki — described item: explains what the lint scan
+                actually checks so operators know whether they need it. */}
             <button
               role="menuitem"
               type="button"
@@ -238,21 +304,37 @@ export function WikiHealthToolbar({
                 setReportOpen(true);
               }}
               disabled={lint.loading || !channelId}
-              className={TOOL_BTN + " disabled:opacity-50 disabled:cursor-not-allowed"}
+              className={TOOL_BTN_DESCRIBED + " disabled:opacity-50 disabled:cursor-not-allowed"}
               aria-label="Lint Wiki — scan for orphan, stale, duplicate, and coherence issues"
             >
-              {lint.loading ? (
-                <Loader2 size={12} className="animate-spin shrink-0" />
-              ) : (
-                <ClipboardCheck size={12} className="shrink-0" />
-              )}
-              <span className="flex-1">{lint.loading ? "Linting…" : "Lint Wiki"}</span>
-              {lintBadge !== null && (
-                <span className="rounded-full bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
-                  {lintBadge}
+              <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 shrink-0">
+                {lint.loading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <ClipboardCheck size={12} />
+                )}
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-foreground">
+                    {lint.loading ? "Linting…" : "Lint Wiki"}
+                  </span>
+                  {lintBadge !== null && (
+                    <span className="rounded-full bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 dark:text-amber-300">
+                      {lintBadge}
+                    </span>
+                  )}
                 </span>
-              )}
+                <span className="block text-[11px] text-muted-foreground leading-snug mt-0.5">
+                  Scan for orphan, stale, duplicate, and coherence issues.
+                </span>
+              </span>
             </button>
+
+            {/* Divider between described "primary actions" (Maintain /
+                Lint) and the secondary nav items (History / Download /
+                Graph) below. */}
+            <div className="my-1 h-px bg-border/60" />
 
             {/* History */}
             <button
@@ -474,7 +556,8 @@ export function WikiHealthToolbar({
                 </button>
               )
             )}
-          </div>
+          </div>,
+          document.body
         )}
       </div>
 
