@@ -368,13 +368,18 @@ export function GraphCanvas({
             nodeDimensionsIncludeLabels: true,
             uniformNodeDimensions: false,
             packComponents: true,
-            nodeSeparation: 100,
-            idealEdgeLength: 120,
-            edgeElasticity: 0.45,
-            nodeRepulsion: 8500,
-            gravity: 0.15,
+            // Bumped for less central collapse — multiple hub nodes
+            // (highly-connected) were sitting on top of each other.
+            // nodeSeparation 100→150 + idealEdgeLength 120→170
+            // forces hub-region clearance without scattering peripherals.
+            // nodeRepulsion 8500→12500 strengthens the overall push.
+            nodeSeparation: 150,
+            idealEdgeLength: 170,
+            edgeElasticity: 0.4,
+            nodeRepulsion: 12500,
+            gravity: 0.12,
             gravityRange: 3.8,
-            numIter: 2500,
+            numIter: 3000,
             tile: false,
             padding: 60,
             fit: true,
