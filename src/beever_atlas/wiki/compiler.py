@@ -4003,6 +4003,294 @@ class WikiCompiler:
 
         return pages
 
+    # ------------------------------------------------------------------
+    # llm-wiki-folder-structure — folder index synthesis + tree shaping
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def apply_folder_plan_to_structure(
+        structure: WikiStructure,
+        *,
+        plan: Any,
+        folder_pages: dict[str, WikiPage],
+    ) -> WikiStructure:
+        """Rearrange a built WikiStructure to honour a folder plan.
+
+        ``structure`` is the output of ``build_structure`` (today's
+        flat layout — topics + fixed pages at root, sub-topics
+        nested). ``plan`` is the planner's output (PlannedStructure-
+        like). ``folder_pages`` is the dict produced by
+        ``compile_folders``.
+
+        Produces a NEW WikiStructure where:
+          - Each planned folder becomes a root-level WikiPageNode (with
+            its own page_type="folder").
+          - Each leaf topic node mentioned in a folder's child_slugs
+            is moved INTO that folder's children, in plan order.
+          - Topics not assigned to any folder, plus all fixed pages,
+            remain at root.
+
+        When ``plan`` has no folders OR ``folder_pages`` is empty, the
+        original structure is returned unchanged — the function is a
+        safe no-op when planning is OFF.
+
+        Section numbers are recomputed by ``assign_section_numbers``
+        AFTER the rearrangement so paths reflect the new tree.
+        """
+        from beever_atlas.wiki.section_numbering import assign_section_numbers
+
+        folders = list(getattr(plan, "folders", None) or []) if plan else []
+        if not folders or not folder_pages:
+            return structure
+
+        # Index existing root nodes by slug → node so we can pluck them
+        # into folders.
+        root_nodes_by_slug: dict[str, WikiPageNode] = {}
+        # Preserve original order for nodes that stay at root.
+        original_order: list[WikiPageNode] = list(structure.pages)
+        for n in original_order:
+            if n.slug:
+                root_nodes_by_slug[n.slug] = n
+
+        # Map planned folder slug → set of child cluster slugs.
+        folders_by_slug: dict[str, list[str]] = {}
+        folder_titles: dict[str, str] = {}
+        for f in folders:
+            f_slug = getattr(f, "slug", None) or ""
+            if not f_slug:
+                continue
+            folders_by_slug[f_slug] = list(getattr(f, "child_slugs", None) or [])
+            folder_titles[f_slug] = getattr(f, "title", None) or f_slug
+
+        # Build folder nodes — each is its own WikiPageNode containing
+        # the planned children's existing nodes (with their sub-topic
+        # subtrees preserved).
+        folder_nodes: list[WikiPageNode] = []
+        consumed_slugs: set[str] = set()
+        for f_slug, child_slugs in folders_by_slug.items():
+            f_page = folder_pages.get(f"folder-{f_slug}")
+            if f_page is None:
+                # No synthesized folder page — skip the folder; its
+                # children stay at root (graceful degradation).
+                continue
+            children_nodes: list[WikiPageNode] = []
+            for cs in child_slugs:
+                child_node = root_nodes_by_slug.get(cs)
+                if child_node is not None:
+                    children_nodes.append(child_node)
+                    consumed_slugs.add(cs)
+            if not children_nodes:
+                # Folder ended up empty — skip it.
+                continue
+            folder_nodes.append(
+                WikiPageNode(
+                    id=f_page.id,
+                    title=f_page.title,
+                    slug=f_page.slug,
+                    section_number="",  # recomputed below
+                    page_type="folder",
+                    memory_count=f_page.memory_count,
+                    children=children_nodes,
+                    is_synthetic=True,
+                )
+            )
+
+        # Build the new root order: folders first (in plan order),
+        # then the original root nodes that weren't consumed (preserving
+        # their original ordering — fixed pages and unassigned topics).
+        new_pages: list[WikiPageNode] = list(folder_nodes) + [
+            n for n in original_order if n.slug not in consumed_slugs
+        ]
+
+        # Reset and recompute section numbers across the new tree so
+        # every node's path reflects its actual position.
+        def _reset(nodes: list[WikiPageNode]) -> None:
+            for n in nodes:
+                n.section_number = ""
+                _reset(n.children)
+
+        _reset(new_pages)
+        assign_section_numbers(new_pages)
+
+        return WikiStructure(
+            channel_id=structure.channel_id,
+            channel_name=structure.channel_name,
+            platform=structure.platform,
+            generated_at=structure.generated_at,
+            is_stale=structure.is_stale,
+            pages=new_pages,
+        )
+
+    async def _compile_folder_page(
+        self,
+        *,
+        folder_slug: str,
+        folder_title: str,
+        children_pages: list[WikiPage],
+    ) -> WikiPage:
+        """Synthesize a folder index page from its already-compiled children.
+
+        Calls the FOLDER_INDEX_PROMPT once per folder and replaces the
+        ``<<CHILDREN_TOC>>`` marker with a deterministic auto-TOC of
+        the children. Returns a ``WikiPage`` with ``page_type="folder"``,
+        ``children_fingerprint`` set to a stable SHA-256 of sorted child
+        slugs, and ``is_synthetic=True``.
+
+        ``children_pages`` MUST be the leaves (or sub-folders) the
+        planner placed in this folder. Order is preserved on output.
+        """
+        from beever_atlas.wiki.prompts import build_folder_index_prompt
+        from beever_atlas.wiki.render import apply_children_toc_marker
+        import hashlib
+
+        # Build the prompt inputs from the children's existing summaries.
+        # No facts loaded here — folder synthesis runs after leaf compile,
+        # and the leaves already distilled the facts. Aggregating top
+        # facts requires walking each child's citations, which is more
+        # plumbing than the bounded folder body needs; we send empty top
+        # facts on the first pass and rely on the prompt's child summaries
+        # to give the LLM enough material.
+        children_for_prompt = [
+            {
+                "title": c.title,
+                "summary": (c.summary or "")[:200],
+            }
+            for c in children_pages
+        ]
+        # Aggregate entities across children's citations (best-effort).
+        entities: list[str] = []
+        seen_entities: set[str] = set()
+        for c in children_pages:
+            for cit in (c.citations or [])[:3]:
+                # Citations don't directly carry entities; skip — top
+                # facts/entities aggregation is a future enhancement.
+                _ = cit
+
+        prompt = build_folder_index_prompt(
+            folder_title=folder_title,
+            children=children_for_prompt,
+            aggregated_entities=entities,
+            top_facts=[],
+        )
+
+        try:
+            result = await self._call_llm(prompt, page_kind="topic")
+            content = (result.content or "").strip()
+            summary = (result.summary or "").strip()
+        except Exception as exc:  # noqa: BLE001 — folder synthesis is best-effort
+            logger.warning(
+                "wiki_compiler_folder_synth_failed slug=%s exc=%s",
+                folder_slug,
+                type(exc).__name__,
+            )
+            content = ""
+            summary = ""
+
+        # Auto-TOC the children regardless of LLM success — operators
+        # always need a way to navigate even if synthesis returned empty.
+        children_for_toc = [
+            {"title": c.title, "slug": c.slug, "summary": (c.summary or "")[:140]}
+            for c in children_pages
+        ]
+        rendered_content = apply_children_toc_marker(content, children_for_toc)
+
+        # children_fingerprint is the SHA-256 of sorted slugs — used by
+        # the maintainer (Phase E) to skip re-synthesis when membership
+        # is unchanged.
+        sorted_slugs = sorted(c.slug for c in children_pages if c.slug)
+        fingerprint = hashlib.sha256(
+            "\n".join(sorted_slugs).encode("utf-8")
+        ).hexdigest()
+
+        # Page memory_count = sum of children memory counts (proxy for
+        # "how much the folder represents"). Last_updated is now since
+        # we just synthesized.
+        from datetime import UTC as _UTC, datetime as _dt
+
+        children_refs = [
+            WikiPageRef(
+                id=f"topic-{c.slug}" if not c.id.startswith("topic-") else c.id,
+                title=c.title,
+                slug=c.slug,
+                section_number="",  # filled in by build_structure
+                memory_count=c.memory_count,
+            )
+            for c in children_pages
+        ]
+
+        return WikiPage(
+            id=f"folder-{folder_slug}",
+            slug=folder_slug,
+            title=folder_title,
+            page_type="folder",
+            parent_id=None,  # Set by build_structure when folder nests.
+            section_number="",
+            content=rendered_content,
+            summary=summary or f"{folder_title} — folder containing {len(children_pages)} pages.",
+            memory_count=sum(c.memory_count for c in children_pages),
+            last_updated=_dt.now(tz=_UTC),
+            citations=[],  # Folder citations: future — could aggregate from children.
+            children=children_refs,
+            children_fingerprint=fingerprint,
+            is_synthetic=True,
+        )
+
+    async def compile_folders(
+        self,
+        *,
+        plan: Any,
+        leaves_by_slug: dict[str, WikiPage],
+    ) -> dict[str, WikiPage]:
+        """Synthesize all folder pages from the planner output.
+
+        ``plan`` is a ``PlannedStructure`` (duck-typed for testing —
+        any object with ``folders`` and ``leaves`` attributes works).
+        ``leaves_by_slug`` maps each leaf slug → its compiled WikiPage
+        (the existing ``compile`` output, keyed by slug).
+
+        Returns a dict ``{folder_id: WikiPage}`` with one entry per
+        folder in the plan. Folders nest only one level deep in v1
+        (the planner is constrained to depth 4 but folder→folder
+        nesting is rare); deeper nesting falls back to flat with a
+        log warning.
+
+        When ``plan`` has no folders this method returns an empty dict
+        (no LLM calls — cheap no-op).
+        """
+        folders = list(getattr(plan, "folders", None) or [])
+        if not folders:
+            return {}
+
+        out: dict[str, WikiPage] = {}
+        for folder in folders:
+            f_slug = getattr(folder, "slug", None) or ""
+            f_title = getattr(folder, "title", None) or f_slug.replace("-", " ").title()
+            child_slugs = list(getattr(folder, "child_slugs", None) or [])
+            if not f_slug or not child_slugs:
+                continue
+            children_pages: list[WikiPage] = []
+            for cs in child_slugs:
+                page = leaves_by_slug.get(cs)
+                if page is None:
+                    # Could be a nested folder slug we haven't compiled yet
+                    # (folder→folder). v1 doesn't deeply nest; skip with log.
+                    logger.warning(
+                        "wiki_compiler_folder_missing_child folder=%s child=%s",
+                        f_slug,
+                        cs,
+                    )
+                    continue
+                children_pages.append(page)
+            if not children_pages:
+                continue
+            folder_page = await self._compile_folder_page(
+                folder_slug=f_slug,
+                folder_title=f_title,
+                children_pages=children_pages,
+            )
+            out[folder_page.id] = folder_page
+        return out
+
     def build_structure(
         self,
         channel_id: str,

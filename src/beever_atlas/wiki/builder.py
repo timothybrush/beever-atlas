@@ -7,6 +7,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
+from typing import Any
 
 from beever_atlas.llm import get_llm_provider
 from beever_atlas.models.domain import WikiMetadata, WikiResponse
@@ -206,6 +207,91 @@ class WikiBuilder:
                 platform=platform,
                 pages=pages,
             )
+
+            # ``llm-wiki-folder-structure`` Phase C — optional folder
+            # plan + folder index synthesis layered on top of the
+            # already-built flat structure. Runs only when the
+            # ``WIKI_FOLDER_PLANNER`` flag is ON AND the channel has
+            # enough topics to warrant folders. Failures (planner
+            # falls back to flat, no folders produced) silently
+            # leave the structure unchanged.
+            try:
+                from beever_atlas.infra.config import get_settings as _gs2
+                from beever_atlas.wiki.structure import WikiStructurePlanner
+
+                _settings2 = _gs2()
+                if _settings2.wiki_folder_planner:
+                    cluster_dicts: list[dict] = []
+                    for c in clusters:
+                        cluster_dicts.append(
+                            {
+                                "id": getattr(c, "id", "") or "",
+                                "title": getattr(c, "title", "") or "",
+                                "summary": getattr(c, "summary", "") or "",
+                                "member_count": getattr(c, "member_count", 0) or 0,
+                                "key_entities": [
+                                    e.model_dump() if hasattr(e, "model_dump") else e
+                                    for e in (getattr(c, "key_entities", []) or [])
+                                ],
+                            }
+                        )
+
+                    # Use the compiler's existing async LLM helper as
+                    # the planner's injected callable. This piggy-backs
+                    # on the compiler's retry/parsing/safety logic and
+                    # avoids re-implementing provider invocation.
+                    async def _llm_call(prompt: str) -> str:
+                        return await compiler._llm_generate_json(  # type: ignore[attr-defined]
+                            prompt, temperature=0.2, page_kind="topic"
+                        )
+
+                    planner = WikiStructurePlanner(
+                        llm=_llm_call,
+                        min_topics_for_folders=_settings2.wiki_min_topics_for_folders,
+                    )
+                    plan = await planner.plan_async(
+                        channel_summary=getattr(channel_summary, "summary", "")
+                        or getattr(channel_summary, "description", "")
+                        or "",
+                        clusters=cluster_dicts,
+                        fact_graph=None,
+                    )
+                    logger.info(
+                        "wiki_folder_planner_result channel=%s folders=%d "
+                        "leaves=%d fallback=%s",
+                        channel_id,
+                        len(plan.folders),
+                        len(plan.leaves),
+                        plan.fallback_reason or "ok",
+                    )
+
+                    if plan.folders:
+                        # Build a slug → page lookup so compile_folders
+                        # can find the leaves to feed into FOLDER_INDEX_PROMPT.
+                        leaves_by_slug: dict[str, Any] = {}
+                        for p in pages.values():
+                            if getattr(p, "slug", None):
+                                leaves_by_slug[p.slug] = p
+                        folder_pages = await compiler.compile_folders(
+                            plan=plan, leaves_by_slug=leaves_by_slug
+                        )
+                        # Add folder pages to the page dict so they
+                        # round-trip through the cache.
+                        for fp_id, fp in folder_pages.items():
+                            pages[fp_id] = fp
+                        # Re-shape the structure to put folders at root
+                        # with their leaves nested inside.
+                        structure = compiler.apply_folder_plan_to_structure(
+                            structure,
+                            plan=plan,
+                            folder_pages=folder_pages,
+                        )
+            except Exception:  # noqa: BLE001 — planner is best-effort
+                logger.exception(
+                    "wiki_folder_planner_unhandled channel=%s — falling back "
+                    "to flat structure",
+                    channel_id,
+                )
 
             duration_ms = int((time.monotonic() - start) * 1000)
             overview = pages.get("overview")

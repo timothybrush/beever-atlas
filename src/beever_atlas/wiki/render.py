@@ -135,4 +135,76 @@ def render_key_facts_table(facts: list[dict], max_rows: int = 8) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# llm-wiki-folder-structure — Children TOC marker rendering
+# ---------------------------------------------------------------------------
+
+CHILDREN_TOC_MARKER = "<<CHILDREN_TOC>>"
+
+
+def render_children_toc(children: list[dict]) -> str:
+    """Render a deterministic Markdown list of folder children.
+
+    Each child dict needs at least ``title`` and ``slug``; ``summary``
+    is optional (when present, rendered as a 1-line description after
+    the link). Returns an empty string when ``children`` is empty so
+    the marker substitution is safe to apply unconditionally.
+
+    Output is plain Markdown (``- [Title](/wiki/slug) — summary``) —
+    no HTML, no GFM-only features. Survives copy-out to any Markdown
+    renderer.
+    """
+    if not children:
+        return ""
+    lines: list[str] = []
+    for child in children:
+        title = (child.get("title") or "").strip() or "Untitled"
+        slug = (child.get("slug") or "").strip()
+        summary = (child.get("summary") or "").strip()
+        if slug:
+            line = f"- [{title}](/wiki/{slug})"
+        else:
+            line = f"- {title}"
+        if summary:
+            # Trim aggressively — the TOC is a wayfinding device, not a
+            # second copy of each child's first paragraph.
+            short = summary[:140].rstrip()
+            if len(summary) > 140:
+                short += "…"
+            line += f" — {short}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def apply_children_toc_marker(content: str, children: list[dict]) -> str:
+    """Replace ``<<CHILDREN_TOC>>`` in ``content`` with the rendered TOC.
+
+    If the marker is missing (LLM forgot to emit it), the rendered TOC
+    is appended at the END of the content under a default heading so
+    the operator can still navigate to children — robust to prompt
+    drift. When ``children`` is empty, the marker is removed silently
+    (no useless empty heading).
+    """
+    toc = render_children_toc(children)
+    if CHILDREN_TOC_MARKER in content:
+        if not toc:
+            # Children list is empty — drop the marker line entirely.
+            return _strip_marker_line(content)
+        return content.replace(CHILDREN_TOC_MARKER, toc)
+    if not toc:
+        return content
+    # Marker missing — append a fallback section at the end.
+    return content.rstrip() + "\n\n## Pages in this folder\n\n" + toc + "\n"
+
+
+def _strip_marker_line(content: str) -> str:
+    """Remove the line containing the marker (and only that line)."""
+    out: list[str] = []
+    for line in content.splitlines():
+        if CHILDREN_TOC_MARKER in line:
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 __all__ = ["render_key_facts_table", "escape_gfm_cell"]

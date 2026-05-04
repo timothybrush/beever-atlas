@@ -26,14 +26,15 @@ block wiki regeneration.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Union
 
 from beever_atlas.wiki.structure.heuristic import (
     HeuristicCandidates,
-    HeuristicGroup,
 )
 from beever_atlas.wiki.structure.validator import (
     PlanValidationError,
@@ -94,7 +95,10 @@ class PlannedStructure:
 
 # Type alias for the LLM caller injected into WikiStructurePlanner.
 # Returns the LLM's raw text response — the planner parses JSON itself.
-LlmCallable = Callable[[str], str]
+# Accepts EITHER a sync callable returning str OR an async callable
+# returning str — the planner's ``plan`` method awaits the result
+# only when needed.
+LlmCallable = Callable[[str], Union[str, Awaitable[str]]]
 
 
 class WikiStructurePlanner:
@@ -114,6 +118,39 @@ class WikiStructurePlanner:
         self._min_topics = min_topics_for_folders
 
     def plan(
+        self,
+        *,
+        channel_summary: str,
+        clusters: list[dict[str, Any]],
+        fact_graph: list[tuple[str, str]] | None = None,
+    ) -> PlannedStructure:
+        """Sync entry point — preserved so existing tests keep working.
+
+        Wraps the async pipeline via ``asyncio.run`` when called from
+        sync code AND the injected LLM is sync. Async callers that
+        already have an event loop should use ``plan_async`` directly
+        to avoid event-loop nesting issues.
+        """
+        coro = self.plan_async(
+            channel_summary=channel_summary,
+            clusters=clusters,
+            fact_graph=fact_graph,
+        )
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop — safe to drive the coroutine directly.
+            return asyncio.run(coro)
+        # We're inside an existing event loop AND the caller used the
+        # sync API — this is a programming error, but we handle it
+        # gracefully by running on a fresh thread to avoid
+        # ``RuntimeError: This event loop is already running``.
+        import concurrent.futures
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as exe:
+            return exe.submit(asyncio.run, coro).result()
+
+    async def plan_async(
         self,
         *,
         channel_summary: str,
@@ -153,7 +190,7 @@ class WikiStructurePlanner:
             )
 
         try:
-            raw = self._invoke_llm(
+            raw = await self._invoke_llm(
                 channel_summary=channel_summary,
                 clusters=clusters,
                 candidates=candidates,
@@ -199,14 +236,20 @@ class WikiStructurePlanner:
 
         return plan
 
-    def _invoke_llm(
+    async def _invoke_llm(
         self,
         *,
         channel_summary: str,
         clusters: list[dict[str, Any]],
         candidates: HeuristicCandidates,
     ) -> str:
-        """Build the prompt + call the LLM. Returns raw text response."""
+        """Build the prompt + call the LLM. Returns raw text response.
+
+        Tolerates both sync and async LLM callables: detects whether
+        the result is awaitable and awaits it if so. Lets the planner
+        be wired into either the legacy sync provider API or the new
+        async one without two separate planner classes.
+        """
         from beever_atlas.wiki.prompts import build_structure_planner_prompt
 
         prompt = build_structure_planner_prompt(
@@ -214,11 +257,11 @@ class WikiStructurePlanner:
             clusters=clusters,
             candidate_groups=candidates.groups,
         )
-        # ``self._llm`` is injected by the caller — wrapping the actual
-        # provider here keeps the planner testable without importing
-        # the LLMProvider singleton.
         assert self._llm is not None
-        return self._llm(prompt)
+        result = self._llm(prompt)
+        if inspect.isawaitable(result):
+            return await result
+        return result  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

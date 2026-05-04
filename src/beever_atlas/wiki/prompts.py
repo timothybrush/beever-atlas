@@ -588,6 +588,98 @@ Return the JSON now.
 """
 
 
+# ---------------------------------------------------------------------------
+# llm-wiki-folder-structure — Folder Index Prompt
+# ---------------------------------------------------------------------------
+
+# Synthesizes a folder's landing page. Receives the folder's title, the
+# title + 1-line summary of every direct child page, an aggregated set
+# of key entities across descendants, and a handful of top-quality
+# facts. Returns a 200-400 word landing page that explains what's in
+# the folder and where to look for what.
+#
+# Critical contract: the output MUST contain the literal token
+# ``<<CHILDREN_TOC>>`` on its own line. The renderer replaces it with
+# a deterministic auto-TOC of children — that way operators always see
+# the actual children even if the LLM drifts from the prompt.
+FOLDER_INDEX_PROMPT = """You are a knowledge wiki compiler. Create a **Folder Index** page that explains what's inside this folder and helps the reader navigate to the right sub-page.
+
+## Inputs
+
+### Folder title
+{folder_title}
+
+### Direct children (in display order)
+{children_json}
+
+### Top entities mentioned across descendants
+{entities_json}
+
+### Top-quality supporting facts
+{top_facts_json}
+
+## Task
+
+Return JSON: {{"content": "markdown string", "summary": "1-2 sentence summary of the folder"}}
+
+The markdown body MUST:
+
+1. Open with a 2-3 sentence intro that frames what this folder covers — the domain, the scope, why it exists. Make it specific to the children listed above; do NOT write a generic "this folder contains topics" line.
+
+2. On its own line, include the literal token `<<CHILDREN_TOC>>`. The compiler will replace this with a deterministic table of contents of the direct children — DO NOT write the TOC yourself, just emit the marker.
+
+3. After the marker, write 1-3 short paragraphs that highlight the most important threads connecting the children (shared people, recurring decisions, key tensions, or open questions). Reference children by their titles. This is what makes the folder PAGE valuable beyond just its TOC.
+
+4. Stay between **200 and 400 words** total (excluding the marker line). Folders that need more depth should rely on their child pages — the index is a wayfinding device, not a deep dive.
+
+## Hard rules
+
+- Output JSON ONLY. No markdown code fences. No leading or trailing prose outside the JSON.
+- Use plain Markdown (no callouts, no mermaid diagrams in the index — those belong on leaf pages).
+- The `summary` field is 1-2 sentences max, suitable for a card or hover preview.
+"""
+
+
+def build_folder_index_prompt(
+    *,
+    folder_title: str,
+    children: list[dict],
+    aggregated_entities: list[str],
+    top_facts: list[dict],
+) -> str:
+    """Render ``FOLDER_INDEX_PROMPT`` with the given inputs.
+
+    ``children`` is a list of ``{title, summary}`` dicts (200-char
+    summaries). ``aggregated_entities`` is the union of top-5 entities
+    across all descendants. ``top_facts`` is up to 5 highest-
+    quality_score facts across descendants — gives the LLM concrete
+    material to riff on without dumping the whole fact set.
+    """
+    import json as _json
+
+    children_payload = [
+        {
+            "title": c.get("title") or "",
+            "summary": (c.get("summary") or "")[:200],
+        }
+        for c in children
+    ]
+    facts_payload = [
+        {
+            "fact": (f.get("memory_text") or f.get("fact") or "")[:200],
+            "author": f.get("author_name") or f.get("user_name") or "",
+            "type": f.get("fact_type") or "",
+        }
+        for f in top_facts[:5]
+    ]
+    return FOLDER_INDEX_PROMPT.format(
+        folder_title=folder_title,
+        children_json=_json.dumps(children_payload, indent=2),
+        entities_json=_json.dumps(aggregated_entities[:10]),
+        top_facts_json=_json.dumps(facts_payload, indent=2),
+    )
+
+
 def build_structure_planner_prompt(
     *,
     channel_summary: str,
