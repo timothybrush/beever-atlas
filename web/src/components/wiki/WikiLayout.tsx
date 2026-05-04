@@ -42,7 +42,10 @@ interface WikiLayoutProps {
 
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 400;
-const DEFAULT_WIDTH = 240;
+// Bumped from 240 → 270 to give two-line ``line-clamp-2`` titles in
+// WikiSidebar enough room without wrapping awkwardly at indent 1+.
+// Users can still drag-resize via the resize handle.
+const DEFAULT_WIDTH = 270;
 const SEARCH_MARK_ATTR = "data-wiki-search-mark";
 
 function clearSearchHighlights(root: HTMLElement | null) {

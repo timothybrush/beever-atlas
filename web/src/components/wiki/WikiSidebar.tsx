@@ -28,17 +28,26 @@ function SidebarItem({ node, isActive, onClick, indent = 0 }: SidebarItemProps) 
           <button
             onClick={onClick}
             aria-label={fullTitle}
-            className={`flex items-center gap-2 w-full rounded-md px-3 py-1.5 text-left text-sm transition-colors ${
+            className={`flex items-start gap-2 w-full rounded-md px-3 py-1.5 text-left text-sm transition-colors ${
               isActive
                 ? "bg-primary/10 text-primary border-l-2 border-primary font-medium"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
             style={{ paddingLeft: `${12 + indent * 16}px` }}
           >
-            <span className="text-xs text-muted-foreground/70 font-mono shrink-0 min-w-[1.5rem]">{node.section_number}</span>
-            <span className="truncate">{node.title}</span>
+            {/* Section number leads — eye scans by number first; with
+                line-clamp-2 below, two-line wrapping disambiguates the
+                "Beever Atlas..." prefix-collision the user reported. */}
+            <span className="text-xs text-muted-foreground/80 font-mono font-semibold shrink-0 min-w-[2rem] mt-0.5">
+              {node.section_number}
+            </span>
+            <span className="line-clamp-2 leading-snug flex-1 break-words">
+              {node.title}
+            </span>
             {node.memory_count > 0 && (
-              <span className="ml-auto text-xs text-muted-foreground/70">{node.memory_count}</span>
+              <span className="ml-auto text-xs text-muted-foreground/70 shrink-0 mt-0.5">
+                {node.memory_count}
+              </span>
             )}
           </button>
         }

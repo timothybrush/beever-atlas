@@ -74,6 +74,10 @@ export function GraphCanvas({
           hasMedia: !!visualDesc,
           visualDesc: visualDesc || "",
           pending: isPending,
+          // Obsidian-style: nodes with no edges drift to the periphery
+          // and read as visually quieter (smaller font, lower opacity)
+          // so the connected core remains the visual anchor.
+          isolated: conns === 0,
         },
         ...(cached ? { position: cached } : {}),
       };
@@ -166,6 +170,25 @@ export function GraphCanvas({
           style: { opacity: 0.35 },
         },
         {
+          // Disconnected nodes drift to the periphery with low gravity;
+          // fade them so the connected core stays the visual anchor.
+          // Mirrors how Obsidian de-emphasizes orphan notes.
+          selector: "node[?isolated]",
+          style: {
+            opacity: 0.5,
+            "font-size": "9px",
+          } as unknown as cytoscape.Css.Node,
+        },
+        {
+          // One-hop-out neighborhood — amber rim. Matches the
+          // ``WikiGraph`` highlight pattern for visual consistency.
+          selector: "node.neighbor",
+          style: {
+            "border-width": 3,
+            "border-color": "#facc15",
+          },
+        },
+        {
           selector: "edge",
           style: {
             width: 1.5,
@@ -217,15 +240,25 @@ export function GraphCanvas({
       layout: hasCachedPositions
         ? { name: "preset", fit: true, padding: 40 }
         : {
+            // Obsidian-style force-directed feel:
+            //   • Higher nodeRepulsion (~5x) pushes clusters apart so
+            //     dense clumps don't crush together.
+            //   • Lower gravity lets isolated nodes drift to the
+            //     periphery instead of collapsing toward center.
+            //   • ``animate: 'end'`` gives a 600ms settle-into-place
+            //     reveal on first load (the eye tracks the motion and
+            //     understands the structure better than a hard pop).
             name: "cose",
-            animate: false,
+            animate: "end",
+            animationDuration: 600,
+            animationEasing: "ease-out-cubic" as cytoscape.Css.TransitionTimingFunction,
             randomize: false,
             nodeDimensionsIncludeLabels: true,
-            nodeRepulsion: () => 14000,
-            idealEdgeLength: () => 130,
-            edgeElasticity: () => 80,
-            gravity: 0.25,
-            padding: 50,
+            nodeRepulsion: () => 80000,
+            idealEdgeLength: () => 180,
+            edgeElasticity: () => 50,
+            gravity: 0.15,
+            padding: 80,
             fit: true,
           } as cytoscape.LayoutOptions,
       minZoom: 0.3,
@@ -331,6 +364,15 @@ export function GraphCanvas({
       const node = evt.target;
       const type = node.data("type") as string;
       const label = node.data("label") as string;
+      // Obsidian-style float: gentle 12% grow on hover. Animates the
+      // pixel width/height (NOT just the class) so the size change is
+      // smooth rather than stepped. Stops any in-flight animation
+      // first so rapid mouseover→out→over toggles don't fight.
+      const baseSize = node.data("nodeSize") as number;
+      node.stop(true, false).animate(
+        { style: { width: baseSize * 1.12, height: baseSize * 1.12 } },
+        { duration: 180, easing: "ease-out-cubic" as cytoscape.Css.TransitionTimingFunction },
+      );
 
       // Create tooltip
       if (!tooltip) {
@@ -363,26 +405,37 @@ export function GraphCanvas({
     });
 
     cy.on("mouseout", "node", (evt) => {
-      evt.target.removeClass("hover");
+      const node = evt.target;
+      node.removeClass("hover");
+      const baseSize = node.data("nodeSize") as number;
+      node.stop(true, false).animate(
+        { style: { width: baseSize, height: baseSize } },
+        { duration: 150, easing: "ease-in-cubic" as cytoscape.Css.TransitionTimingFunction },
+      );
       if (tooltip) {
         tooltip.style.display = "none";
       }
     });
 
-    // Click: select + highlight neighborhood
+    // Click: select + highlight neighborhood. Three-class pattern
+    // ported from WikiGraph for visual consistency:
+    //   • everything dims
+    //   • clicked node + its closed-neighborhood un-dim
+    //   • neighborhood nodes get the amber-rim ``neighbor`` class
     cy.on("tap", "node", (evt) => {
       const node = evt.target;
       const neighborhood = node.closedNeighborhood();
-      cy.elements().removeClass("dimmed highlighted hover");
+      cy.elements().removeClass("dimmed highlighted hover neighbor");
       cy.elements().addClass("dimmed");
       neighborhood.removeClass("dimmed");
+      neighborhood.nodes().addClass("neighbor");
       neighborhood.edges().addClass("highlighted");
       onSelectRef.current(node.id());
     });
 
     cy.on("tap", (evt) => {
       if (evt.target === cy) {
-        cy.elements().removeClass("dimmed highlighted hover");
+        cy.elements().removeClass("dimmed highlighted hover neighbor");
         onSelectRef.current(null);
       }
     });

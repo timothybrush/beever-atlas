@@ -100,7 +100,11 @@ export function MemoryGraphView({ channelId }: Props) {
 
   return (
     <div className="flex flex-col h-full min-h-0">
-      <div className="flex items-center justify-between border-b border-border bg-card/60 px-5 py-2">
+      {/* No border on this strip — TierBrowser already owns a border-b
+          on the segmented-toggle strip directly above. Stacking two
+          rules creates visual double-vision. The filter row reads as
+          a quieter sub-header to the toggle. */}
+      <div className="flex items-center bg-card/60 px-5 py-1.5 border-b border-border/50">
         <GraphFilters entityTypes={entityTypes} selected={visibleTypes} onChange={setVisibleTypes} />
       </div>
       {/* Wrap the canvas + selection panel so Enlarge spans both. The
