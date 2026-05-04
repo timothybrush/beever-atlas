@@ -584,6 +584,28 @@ export function WikiTab() {
     });
   }, [triggerRefresh, refetch, refetchVersions]);
 
+  // Restructure tree — POSTs ``?restructure=true`` so the backend
+  // forces the structure planner to run on this regenerate even when
+  // ``WIKI_FOLDER_PLANNER`` is OFF. Distinct from the standard
+  // refresh: an opt-in "re-plan the folder hierarchy from scratch"
+  // operator action. Surfaced as a Tools dropdown item.
+  const handleRestructure = useCallback(async () => {
+    if (!channelId) return;
+    try {
+      const langParam = targetLang ? `?target_lang=${encodeURIComponent(targetLang)}&restructure=true` : "?restructure=true";
+      await api.post(`/api/channels/${channelId}/wiki/refresh${langParam}`);
+      // Hand off to the same polling refetch flow the normal refresh uses.
+      triggerRefresh(() => {
+        refetch();
+        refetchVersions();
+      });
+    } catch (err) {
+      // Non-fatal: log so an operator can debug, but don't break the UI.
+      // eslint-disable-next-line no-console
+      console.error("restructure_tree_failed", err);
+    }
+  }, [channelId, targetLang, triggerRefresh, refetch, refetchVersions]);
+
   const handleRegenerateInLang = useCallback((lang: string) => {
     // Switch displayed language AND force a regeneration in that language.
     // Used by the empty-state "Generate" CTA — unambiguously means "make one".
@@ -919,6 +941,7 @@ export function WikiTab() {
           historyOpen={versionHistoryOpen}
           versionCount={wiki?.version_count ?? 0}
           onRegenerate={handleRefresh}
+          onRestructure={handleRestructure}
           isRegenerating={isRefreshing}
         />
       }

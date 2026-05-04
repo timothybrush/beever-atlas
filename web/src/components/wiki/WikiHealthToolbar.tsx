@@ -42,6 +42,11 @@ interface Props {
   versionCount?: number;
   /** Called when the user clicks "Regenerate from scratch" from the Tools menu. */
   onRegenerate?: () => void;
+  /** Called when the user clicks "Restructure tree" — re-plans the wiki's
+   *  folder structure from scratch. Distinct from Regenerate (which
+   *  rebuilds every page). Shipped as part of the
+   *  llm-wiki-folder-structure change. */
+  onRestructure?: () => void;
   /** Whether a regeneration is currently running. */
   isRegenerating?: boolean;
   /** Number of failed extractions — Failures item is hidden when 0. */
@@ -103,6 +108,7 @@ export function WikiHealthToolbar({
   historyOpen = false,
   versionCount = 0,
   onRegenerate,
+  onRestructure,
   isRegenerating = false,
   failureCount,
   activeSlug,
@@ -331,9 +337,39 @@ export function WikiHealthToolbar({
               </span>
             </button>
 
+            {/* Restructure tree — described item, only when wired by parent.
+                Re-runs the structure planner from scratch and rebuilds
+                the folder hierarchy. Distinct from Regenerate (which
+                rebuilds every page) — restructure can run alone when
+                you only want to re-plan folder boundaries. */}
+            {onRestructure && (
+              <button
+                role="menuitem"
+                type="button"
+                onClick={() => {
+                  setToolsOpen(false);
+                  onRestructure();
+                }}
+                className={TOOL_BTN_DESCRIBED}
+                aria-label="Restructure tree — re-plan the wiki's folder hierarchy from scratch"
+              >
+                <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 shrink-0">
+                  <Network size={12} />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="text-xs font-semibold text-foreground">
+                    Restructure tree
+                  </span>
+                  <span className="block text-[11px] text-muted-foreground leading-snug mt-0.5">
+                    Re-plan folder boundaries from the agent's structure planner.
+                  </span>
+                </span>
+              </button>
+            )}
+
             {/* Divider between described "primary actions" (Maintain /
-                Lint) and the secondary nav items (History / Download /
-                Graph) below. */}
+                Lint / Restructure) and the secondary nav items
+                (History / Download / Graph) below. */}
             <div className="my-1 h-px bg-border/60" />
 
             {/* History */}

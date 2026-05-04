@@ -250,6 +250,14 @@ async def refresh_wiki(
     channel_id: str,
     background_tasks: BackgroundTasks,
     target_lang: str | None = Query(default=None),
+    restructure: bool = Query(
+        default=False,
+        description=(
+            "When true, force the structure planner to run regardless of "
+            "WIKI_FOLDER_PLANNER. Used by the operator-triggered Restructure "
+            "tree action — see llm-wiki-folder-structure spec."
+        ),
+    ),
     principal: Principal = Depends(require_user),
 ) -> dict:
     """Trigger async wiki generation for a channel."""
@@ -270,15 +278,29 @@ async def refresh_wiki(
         target_lang=lang,
     )
 
-    background_tasks.add_task(_run_generation, builder, channel_id, cache, lang)
-    return {"status": "started", "channel_id": channel_id}
+    background_tasks.add_task(
+        _run_generation, builder, channel_id, cache, lang, restructure
+    )
+    return {
+        "status": "started",
+        "channel_id": channel_id,
+        "restructure": restructure,
+    }
 
 
 async def _run_generation(
-    builder, channel_id: str, cache: WikiCache, target_lang: str = "en"
+    builder,
+    channel_id: str,
+    cache: WikiCache,
+    target_lang: str = "en",
+    force_restructure: bool = False,
 ) -> None:
     try:
-        await builder.refresh_wiki(channel_id, target_lang=target_lang)
+        await builder.refresh_wiki(
+            channel_id,
+            target_lang=target_lang,
+            force_restructure=force_restructure,
+        )
     except Exception as exc:
         logger.error("Wiki generation failed channel=%s: %s", channel_id, exc, exc_info=True)
         await cache.set_generation_status(

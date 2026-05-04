@@ -68,6 +68,7 @@ class WikiBuilder:
         *,
         target_lang: str | None = None,
         source_lang: str | None = None,
+        force_restructure: bool = False,
     ) -> WikiResponse:
         """Full pipeline: gather → compile → cache. Returns the WikiResponse.
 
@@ -110,6 +111,7 @@ class WikiBuilder:
                 channel_id=channel_id,
                 target_lang=target_lang,
                 source_lang=source_lang,
+                force_restructure=force_restructure,
             )
 
     async def _generate_wiki_locked(
@@ -118,6 +120,7 @@ class WikiBuilder:
         channel_id: str,
         target_lang: str,
         source_lang: str,
+        force_restructure: bool = False,
     ) -> WikiResponse:
         _ACTIVE_GENERATIONS.add(channel_id)
         compiler = self._make_compiler(target_lang=target_lang, source_lang=source_lang)
@@ -220,7 +223,7 @@ class WikiBuilder:
                 from beever_atlas.wiki.structure import WikiStructurePlanner
 
                 _settings2 = _gs2()
-                if _settings2.wiki_folder_planner:
+                if _settings2.wiki_folder_planner or force_restructure:
                     cluster_dicts: list[dict] = []
                     for c in clusters:
                         cluster_dicts.append(
@@ -360,10 +363,25 @@ class WikiBuilder:
         finally:
             _ACTIVE_GENERATIONS.discard(channel_id)
 
-    async def refresh_wiki(self, channel_id: str, *, target_lang: str | None = None) -> None:
+    async def refresh_wiki(
+        self,
+        channel_id: str,
+        *,
+        target_lang: str | None = None,
+        force_restructure: bool = False,
+    ) -> None:
         """Async wrapper for background generation.
 
         Serialized per-channel via module-level lock; concurrent invocations
         await rather than rejecting.
+
+        ``force_restructure`` (Phase E of llm-wiki-folder-structure) bypasses
+        the ``WIKI_FOLDER_PLANNER`` flag and forces the structure planner
+        to run on this single regenerate. Used by the "Restructure tree"
+        operator action without flipping the flag globally.
         """
-        await self.generate_wiki(channel_id, target_lang=target_lang)
+        await self.generate_wiki(
+            channel_id,
+            target_lang=target_lang,
+            force_restructure=force_restructure,
+        )

@@ -73,9 +73,11 @@ function SidebarItem({ node, isActive, onClick, indent = 0, displayTitle }: Side
   const shownTitle = displayTitle ?? node.title;
   // Fixed pages (Overview, FAQ, Glossary, People & Experts, Recent
   // Activity, Resources & Media) lead with a recognizable icon instead
-  // of a numeric prefix. The numeric structure is reserved for topics
-  // and sub-topics where it carries real semantic meaning (2.1, 2.21).
+  // of a numeric prefix. Folder pages (planner-produced) use the
+  // Folder icon. The numeric structure is reserved for topics and
+  // sub-topics where it carries real semantic meaning (2.1, 2.21).
   const isFixed = node.page_type === "fixed";
+  const isBackendFolder = node.page_type === "folder";
   const FixedIcon = isFixed ? iconForFixedPage(node) : null;
 
   return (
@@ -95,6 +97,10 @@ function SidebarItem({ node, isActive, onClick, indent = 0, displayTitle }: Side
             {FixedIcon ? (
               <span className="shrink-0 flex h-5 w-7 items-center justify-center text-muted-foreground/75">
                 <FixedIcon size={14} />
+              </span>
+            ) : isBackendFolder ? (
+              <span className="shrink-0 flex h-5 w-7 items-center justify-center text-primary/75">
+                <Folder size={14} />
               </span>
             ) : (
               /* Section number leads for topics — eye scans by number

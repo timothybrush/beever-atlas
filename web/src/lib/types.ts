@@ -56,7 +56,7 @@ export interface WikiPage {
   id: string;
   slug: string;
   title: string;
-  page_type: "fixed" | "topic" | "sub-topic";
+  page_type: "fixed" | "topic" | "sub-topic" | "folder";
   parent_id: string | null;
   section_number: string;
   content: string;
@@ -65,6 +65,11 @@ export interface WikiPage {
   last_updated: string;
   citations: WikiCitation[];
   children: WikiPageRef[];
+  /** SHA-256 of sorted child slugs (folder pages only). Used by the
+   *  maintainer to skip re-synthesis when membership is unchanged. */
+  children_fingerprint?: string | null;
+  /** True for planner-produced folders (vs. hand-curated, future). */
+  is_synthetic?: boolean;
 }
 
 export interface WikiPageNode {
@@ -72,9 +77,11 @@ export interface WikiPageNode {
   title: string;
   slug: string;
   section_number: string;
-  page_type: "fixed" | "topic" | "sub-topic";
+  page_type: "fixed" | "topic" | "sub-topic" | "folder";
   memory_count: number;
   children: WikiPageNode[];
+  /** True for planner-produced folders (vs. hand-curated, future). */
+  is_synthetic?: boolean;
 }
 
 export interface WikiStructure {
