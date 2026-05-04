@@ -651,3 +651,41 @@ async def get_wiki_page_by_slug(
             status_code=301,
         )
     return page.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# wiki-llm-native-redesign §6 — wiki graph view
+# ---------------------------------------------------------------------------
+
+
+@router.get("/graph")
+async def get_wiki_graph(
+    channel_id: str,
+    principal: Principal = Depends(require_user),
+) -> dict:
+    """Return the channel's wiki graph in Cytoscape.js format.
+
+    Always 200 — empty channel returns ``{nodes: [], edges: []}`` so
+    the frontend can render an empty-state without a 404 round-trip.
+    Graph backends without parity (NullGraphStore, NebulaStore until
+    they implement ``get_wiki_graph``) also return the empty shape so
+    the route stays available across deployments.
+    """
+    await assert_channel_access(principal, channel_id)
+    stores = get_stores()
+    graph = stores.graph
+    if not hasattr(graph, "get_wiki_graph"):
+        return {"channel_id": channel_id, "nodes": [], "edges": []}
+    try:
+        payload = await graph.get_wiki_graph(channel_id)
+    except Exception as exc:  # noqa: BLE001 — soft-fail to empty graph
+        logger.exception(
+            "event=wiki_graph_query_failed channel_id=%s err=%s",
+            channel_id,
+            exc,
+        )
+        return {"channel_id": channel_id, "nodes": [], "edges": []}
+    payload.setdefault("channel_id", channel_id)
+    payload.setdefault("nodes", [])
+    payload.setdefault("edges", [])
+    return payload

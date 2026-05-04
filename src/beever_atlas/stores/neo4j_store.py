@@ -1263,9 +1263,7 @@ class Neo4jStore:
         """
         now_iso = datetime.now(tz=UTC).isoformat()
         last_updated_iso = (
-            last_updated.isoformat()
-            if isinstance(last_updated, datetime)
-            else str(last_updated)
+            last_updated.isoformat() if isinstance(last_updated, datetime) else str(last_updated)
         )
         async with self._driver.session() as session:
             result = await session.run(
@@ -1323,3 +1321,144 @@ class Neo4jStore:
                 src_slug=src_slug,
                 dst_slug=dst_slug,
             )
+
+    async def get_wiki_graph(self, channel_id: str) -> dict[str, Any]:
+        """Return the channel's wiki graph in Cytoscape.js format.
+
+        Shape:
+            {
+              "channel_id": str,
+              "nodes": [
+                {"data": {"id": str, "label": str, "kind": "wiki" | "entity",
+                          "page_kind"?: str, "version"?: int, "last_updated"?: str}}
+              ],
+              "edges": [
+                {"data": {"id": str, "source": str, "target": str,
+                          "kind": "references_wiki" | "references_entity"}}
+              ]
+            }
+
+        Includes:
+          - Every ``(:WikiPage {channel_id})`` node;
+          - Every ``REFERENCES`` edge between two WikiPage nodes in the
+            channel;
+          - Cross-edges from WikiPage to ``(:Entity)`` nodes that the
+            page references via the existing entity-graph wiring (when
+            those edges exist).
+        """
+        out: dict[str, Any] = {
+            "channel_id": channel_id,
+            "nodes": [],
+            "edges": [],
+        }
+        async with self._driver.session() as session:
+            # 1) WikiPage nodes
+            page_result = await session.run(
+                """
+                MATCH (w:WikiPage {channel_id: $channel_id})
+                RETURN w.slug AS slug, w.title AS title, w.kind AS kind,
+                       w.version AS version, w.last_updated AS last_updated
+                """,
+                channel_id=channel_id,
+            )
+            seen_node_ids: set[str] = set()
+            async for record in page_result:
+                slug = record["slug"]
+                if not slug or slug in seen_node_ids:
+                    continue
+                seen_node_ids.add(slug)
+                out["nodes"].append(
+                    {
+                        "data": {
+                            "id": slug,
+                            "label": record["title"] or slug,
+                            "kind": "wiki",
+                            "page_kind": record["kind"] or "topic",
+                            "version": record["version"] or 0,
+                            "last_updated": record["last_updated"] or "",
+                        }
+                    }
+                )
+
+            # 2) REFERENCES edges between WikiPage nodes in the channel
+            edge_result = await session.run(
+                """
+                MATCH (src:WikiPage {channel_id: $channel_id})
+                       -[:REFERENCES]->
+                      (dst:WikiPage {channel_id: $channel_id})
+                RETURN src.slug AS src_slug, dst.slug AS dst_slug
+                """,
+                channel_id=channel_id,
+            )
+            seen_edges: set[tuple[str, str, str]] = set()
+            async for record in edge_result:
+                src_slug = record["src_slug"]
+                dst_slug = record["dst_slug"]
+                if not src_slug or not dst_slug:
+                    continue
+                key = (src_slug, dst_slug, "references_wiki")
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                out["edges"].append(
+                    {
+                        "data": {
+                            "id": f"e:{src_slug}->{dst_slug}",
+                            "source": src_slug,
+                            "target": dst_slug,
+                            "kind": "references_wiki",
+                        }
+                    }
+                )
+
+            # 3) Cross-edges to Entity nodes the page references via the
+            #    existing entity-graph wiring. Edge type is intentionally
+            #    permissive (any directed edge from a WikiPage to an
+            #    Entity counts) so the graph picks up future relation
+            #    types without code changes.
+            entity_result = await session.run(
+                """
+                MATCH (w:WikiPage {channel_id: $channel_id})-[]->(e:Entity)
+                WHERE e.channel_id = $channel_id OR e.scope = 'global'
+                RETURN DISTINCT w.slug AS src_slug, e.name AS entity_name,
+                                e.type AS entity_type
+                """,
+                channel_id=channel_id,
+            )
+            async for record in entity_result:
+                src_slug = record["src_slug"]
+                entity_name = record["entity_name"]
+                if not src_slug or not entity_name:
+                    continue
+                # Entity node id is namespaced so it cannot collide with
+                # a WikiPage slug ("entity:" prefix is reserved on the
+                # wiki side too — see _slug_for_entity in wiki_maintainer).
+                entity_id = f"entity:{entity_name}"
+                if entity_id not in seen_node_ids:
+                    seen_node_ids.add(entity_id)
+                    out["nodes"].append(
+                        {
+                            "data": {
+                                "id": entity_id,
+                                "label": entity_name,
+                                "kind": "entity",
+                                "entity_type": record["entity_type"] or "",
+                            }
+                        }
+                    )
+                key = (src_slug, entity_id, "references_entity")
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                out["edges"].append(
+                    {
+                        "data": {
+                            "id": f"e:{src_slug}->{entity_id}",
+                            "source": src_slug,
+                            "target": entity_id,
+                            "kind": "references_entity",
+                        }
+                    }
+                )
+
+        return out

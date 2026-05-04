@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense, lazy } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -6,6 +6,11 @@ import {
   useLocation,
   useNavigationType,
 } from "react-router-dom";
+
+// Lazy-load the wiki graph route so neither cytoscape (~200 KB) nor
+// the WikiGraph component appears in the wiki tab's main bundle.
+// (§6.6 + §6.13 — bundle-weight contract.)
+const WikiGraph = lazy(() => import("@/components/wiki/WikiGraph"));
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
@@ -79,6 +84,23 @@ function AppShell() {
               <Route path="/channels/:id" element={<ChannelWorkspace />}>
                 <Route index element={<ChannelDefaultRedirect />} />
                 <Route path="wiki" element={<WikiTab />} />
+                <Route
+                  path="wiki/graph"
+                  element={
+                    <Suspense
+                      fallback={
+                        <div
+                          className="flex h-full items-center justify-center text-sm text-muted-foreground"
+                          data-testid="wiki-graph-suspense"
+                        >
+                          Loading graph view…
+                        </div>
+                      }
+                    >
+                      <WikiGraph />
+                    </Suspense>
+                  }
+                />
                 <Route path="messages" element={<MessagesTab />} />
                 <Route path="memories" element={<TierBrowser />} />
                 <Route path="graph" element={<GraphTab />} />

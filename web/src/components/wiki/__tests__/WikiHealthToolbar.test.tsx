@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { WikiHealthToolbar } from "../WikiHealthToolbar";
 
 // ---------------------------------------------------------------------------
@@ -96,23 +97,25 @@ function renderToolbar(
   }> = {},
 ) {
   return render(
-    <WikiHealthToolbar
-      channelId="ch-1"
-      manualMode={props.manualMode ?? true}
-      versionCount={props.versionCount ?? 0}
-      failureCount={props.failureCount}
-      onDownload={props.onDownload}
-      onHistoryToggle={props.onHistoryToggle}
-      onRegenerate={props.onRegenerate}
-      isRegenerating={props.isRegenerating ?? false}
-      activeSlug={props.activeSlug}
-      activePagePinned={props.activePagePinned}
-      activePageHidden={props.activePageHidden}
-      onPinToggle={props.onPinToggle}
-      onHideToggle={props.onHideToggle}
-      onSplit={props.onSplit}
-      onMerge={props.onMerge}
-    />,
+    <MemoryRouter initialEntries={["/channels/ch-1/wiki"]}>
+      <WikiHealthToolbar
+        channelId="ch-1"
+        manualMode={props.manualMode ?? true}
+        versionCount={props.versionCount ?? 0}
+        failureCount={props.failureCount}
+        onDownload={props.onDownload}
+        onHistoryToggle={props.onHistoryToggle}
+        onRegenerate={props.onRegenerate}
+        isRegenerating={props.isRegenerating ?? false}
+        activeSlug={props.activeSlug}
+        activePagePinned={props.activePagePinned}
+        activePageHidden={props.activePageHidden}
+        onPinToggle={props.onPinToggle}
+        onHideToggle={props.onHideToggle}
+        onSplit={props.onSplit}
+        onMerge={props.onMerge}
+      />
+    </MemoryRouter>,
   );
 }
 
@@ -340,7 +343,9 @@ describe("WikiHealthToolbar — Lint findings panel", () => {
     // Now simulate lint running again — flip loading=true
     mockLintState.loading = true;
     rerender(
-      <WikiHealthToolbar channelId="ch-1" manualMode={true} />,
+      <MemoryRouter initialEntries={["/channels/ch-1/wiki"]}>
+        <WikiHealthToolbar channelId="ch-1" manualMode={true} />
+      </MemoryRouter>,
     );
 
     const status = screen.getByRole("status");
@@ -465,13 +470,15 @@ describe("WikiHealthToolbar — curation items (§5.15 / §5.16)", () => {
 
     // Re-render with pinned=true and verify the label flipped to Unpin.
     rerender(
-      <WikiHealthToolbar
-        channelId="ch-1"
-        manualMode
-        activeSlug="topic-auth"
-        activePagePinned={true}
-        onPinToggle={onPinToggle}
-      />,
+      <MemoryRouter initialEntries={["/channels/ch-1/wiki"]}>
+        <WikiHealthToolbar
+          channelId="ch-1"
+          manualMode
+          activeSlug="topic-auth"
+          activePagePinned={true}
+          onPinToggle={onPinToggle}
+        />
+      </MemoryRouter>,
     );
     await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
     expect(screen.getByRole("menuitem", { name: /Unpin this page/i })).toBeInTheDocument();
@@ -490,13 +497,15 @@ describe("WikiHealthToolbar — curation items (§5.15 / §5.16)", () => {
     expect(onHideToggle).toHaveBeenCalledWith(true);
 
     rerender(
-      <WikiHealthToolbar
-        channelId="ch-1"
-        manualMode
-        activeSlug="topic-auth"
-        activePageHidden={true}
-        onHideToggle={onHideToggle}
-      />,
+      <MemoryRouter initialEntries={["/channels/ch-1/wiki"]}>
+        <WikiHealthToolbar
+          channelId="ch-1"
+          manualMode
+          activeSlug="topic-auth"
+          activePageHidden={true}
+          onHideToggle={onHideToggle}
+        />
+      </MemoryRouter>,
     );
     await user.click(screen.getByRole("button", { name: /wiki tools menu/i }));
     expect(screen.getByRole("menuitem", { name: /Show this page/i })).toBeInTheDocument();

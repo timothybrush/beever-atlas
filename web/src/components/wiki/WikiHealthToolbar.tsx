@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   ChevronDown,
@@ -8,6 +9,7 @@ import {
   EyeOff,
   History,
   Loader2,
+  Network,
   Pin,
   PinOff,
   RefreshCw,
@@ -108,6 +110,7 @@ export function WikiHealthToolbar({
 }: Props) {
   const lint = useWikiLint(channelId);
   const maintain = useWikiMaintain(channelId);
+  const navigate = useNavigate();
   const [reportOpen, setReportOpen] = useState(false);
   const [failuresOpen, setFailuresOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -286,6 +289,22 @@ export function WikiHealthToolbar({
             >
               <Download size={12} className="shrink-0" />
               <span className="flex-1">Download</span>
+            </button>
+
+            {/* Graph view (§6.10) — opens the cross-link graph route */}
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => {
+                setToolsOpen(false);
+                navigate(`/channels/${channelId}/wiki/graph`);
+              }}
+              disabled={!channelId}
+              className={TOOL_BTN + " disabled:opacity-40 disabled:cursor-not-allowed"}
+              aria-label="Open the wiki graph view"
+            >
+              <Network size={12} className="shrink-0" />
+              <span className="flex-1">Graph</span>
             </button>
 
             {/* Curation block (§5.15) — only when a page is active */}
