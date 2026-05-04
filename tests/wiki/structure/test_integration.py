@@ -123,6 +123,113 @@ def test_apply_folder_plan_no_folders_is_noop() -> None:
     assert out is structure  # same object — no rearrangement
 
 
+@pytest.mark.asyncio
+async def test_compile_folders_handles_nested_folders() -> None:
+    """REGRESSION: planner can produce folder→folder nesting (depth 3+).
+    compile_folders must process inner folders first via topological
+    sort so outer folders can find inner-folder children in the
+    folder_pages_by_slug lookup. Without this, every nested-folder
+    plan would silently produce empty outer folders.
+    """
+    plan = PlannedStructure(
+        folders=[
+            # Outer: "project" contains inner folders, NOT topics directly.
+            PlannedFolder(
+                slug="project",
+                title="Project",
+                child_slugs=["security", "growth"],
+            ),
+            # Inner: "security" contains topics.
+            PlannedFolder(
+                slug="security",
+                title="Security",
+                child_slugs=["auth", "rbac"],
+            ),
+            # Inner: "growth" contains topics.
+            PlannedFolder(
+                slug="growth",
+                title="Growth",
+                child_slugs=["marketing", "sales"],
+            ),
+        ],
+        leaves=[],
+    )
+    leaves_by_slug = {
+        slug: _make_topic_page(slug, slug.title())
+        for slug in ["auth", "rbac", "marketing", "sales"]
+    }
+    compiler = WikiCompiler.__new__(WikiCompiler)
+
+    async def _fake_call_llm(prompt: str, **kwargs):
+        from beever_atlas.wiki.compiler import CompiledPageContent
+
+        return CompiledPageContent(content="x <<CHILDREN_TOC>>", summary="s")
+
+    compiler._call_llm = _fake_call_llm  # type: ignore[method-assign]
+    folder_pages = await compiler.compile_folders(
+        plan=plan, leaves_by_slug=leaves_by_slug
+    )
+    # All 3 folders should be produced — outer + 2 inners.
+    assert "folder-project" in folder_pages
+    assert "folder-security" in folder_pages
+    assert "folder-growth" in folder_pages
+    # Outer must contain BOTH inner folders (not topic refs).
+    project = folder_pages["folder-project"]
+    inner_slugs = {c.slug for c in project.children}
+    assert inner_slugs == {"security", "growth"}, (
+        "REGRESSION: outer folder is missing one or both inner folders. "
+        "compile_folders likely failed to handle folder→folder nesting."
+    )
+
+
+def test_apply_folder_plan_handles_nested_folders() -> None:
+    """REGRESSION: apply_folder_plan_to_structure must wire inner
+    folder nodes as children of outer folders, AND keep nested folders
+    out of the root-level page list (only orphan folders go at root)."""
+    structure = _make_flat_structure(
+        [
+            ("auth", "Auth"),
+            ("rbac", "RBAC"),
+            ("marketing", "Marketing"),
+        ]
+    )
+    plan = PlannedStructure(
+        folders=[
+            PlannedFolder(slug="project", title="Project", child_slugs=["security", "growth"]),
+            PlannedFolder(slug="security", title="Security", child_slugs=["auth", "rbac"]),
+            PlannedFolder(slug="growth", title="Growth", child_slugs=["marketing"]),
+        ],
+        leaves=[],
+    )
+    folder_pages = {
+        f"folder-{slug}": WikiPage(
+            id=f"folder-{slug}",
+            slug=slug,
+            title=slug.title(),
+            page_type="folder",
+            content=f"Index for {slug}",
+            summary=f"{slug} folder",
+        )
+        for slug in ["project", "security", "growth"]
+    }
+    out = WikiCompiler.apply_folder_plan_to_structure(
+        structure, plan=plan, folder_pages=folder_pages
+    )
+    # Only the OUTER folder is at root.
+    assert len(out.pages) == 1
+    project = out.pages[0]
+    assert project.slug == "project"
+    assert project.page_type == "folder"
+    # Project contains the two inner folders.
+    inner_slugs = [c.slug for c in project.children]
+    assert sorted(inner_slugs) == ["growth", "security"]
+    # Security folder has the 2 topics; growth has 1.
+    security = next(c for c in project.children if c.slug == "security")
+    growth = next(c for c in project.children if c.slug == "growth")
+    assert {c.slug for c in security.children} == {"auth", "rbac"}
+    assert {c.slug for c in growth.children} == {"marketing"}
+
+
 def test_apply_folder_plan_skips_folder_with_unknown_children() -> None:
     """If the planner references slugs that don't exist in the structure,
     the folder is silently skipped (its children stay at root)."""

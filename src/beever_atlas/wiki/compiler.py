@@ -4062,43 +4062,74 @@ class WikiCompiler:
             folders_by_slug[f_slug] = list(getattr(f, "child_slugs", None) or [])
             folder_titles[f_slug] = getattr(f, "title", None) or f_slug
 
-        # Build folder nodes — each is its own WikiPageNode containing
-        # the planned children's existing nodes (with their sub-topic
-        # subtrees preserved).
-        folder_nodes: list[WikiPageNode] = []
-        consumed_slugs: set[str] = set()
-        for f_slug, child_slugs in folders_by_slug.items():
+        # Build ALL folder nodes first (without children), then wire
+        # children in a second pass — this lets folders reference each
+        # other (nested folders). Order:
+        #   1. Materialize each folder as an empty WikiPageNode.
+        #   2. For each folder, populate its children from root_nodes_by_slug
+        #      OR from sibling folder nodes (built in step 1).
+        #   3. Mark which folders are referenced as children of other
+        #      folders — those are NOT root nodes; only orphan folders
+        #      (top-level) appear at root.
+        folder_nodes_by_slug: dict[str, WikiPageNode] = {}
+        for f_slug in folders_by_slug:
             f_page = folder_pages.get(f"folder-{f_slug}")
             if f_page is None:
-                # No synthesized folder page — skip the folder; its
-                # children stay at root (graceful degradation).
+                # No synthesized folder page — skip; its planned children
+                # will fall through to root in the final assembly below.
                 continue
-            children_nodes: list[WikiPageNode] = []
-            for cs in child_slugs:
-                child_node = root_nodes_by_slug.get(cs)
-                if child_node is not None:
-                    children_nodes.append(child_node)
-                    consumed_slugs.add(cs)
-            if not children_nodes:
-                # Folder ended up empty — skip it.
-                continue
-            folder_nodes.append(
-                WikiPageNode(
-                    id=f_page.id,
-                    title=f_page.title,
-                    slug=f_page.slug,
-                    section_number="",  # recomputed below
-                    page_type="folder",
-                    memory_count=f_page.memory_count,
-                    children=children_nodes,
-                    is_synthetic=True,
-                )
+            folder_nodes_by_slug[f_slug] = WikiPageNode(
+                id=f_page.id,
+                title=f_page.title,
+                slug=f_page.slug,
+                section_number="",  # recomputed at end
+                page_type="folder",
+                memory_count=f_page.memory_count,
+                children=[],  # filled in pass 2
+                is_synthetic=True,
             )
 
-        # Build the new root order: folders first (in plan order),
-        # then the original root nodes that weren't consumed (preserving
-        # their original ordering — fixed pages and unassigned topics).
-        new_pages: list[WikiPageNode] = list(folder_nodes) + [
+        # Pass 2: wire children. A folder's child slug may reference
+        # either a leaf topic (in root_nodes_by_slug) OR another folder
+        # (in folder_nodes_by_slug). Track which slugs end up nested
+        # so we can exclude them from the root-level list.
+        consumed_slugs: set[str] = set()
+        nested_folder_slugs: set[str] = set()
+        for f_slug, child_slugs in folders_by_slug.items():
+            folder_node = folder_nodes_by_slug.get(f_slug)
+            if folder_node is None:
+                continue
+            for cs in child_slugs:
+                # Prefer topic node; fall back to sibling folder node.
+                child_node = root_nodes_by_slug.get(cs)
+                if child_node is not None:
+                    folder_node.children.append(child_node)
+                    consumed_slugs.add(cs)
+                    continue
+                child_folder = folder_nodes_by_slug.get(cs)
+                if child_folder is not None:
+                    folder_node.children.append(child_folder)
+                    nested_folder_slugs.add(cs)
+
+        # Drop folders that ended up with zero children (planner
+        # references all unresolved or no-op).
+        for f_slug in list(folder_nodes_by_slug.keys()):
+            if not folder_nodes_by_slug[f_slug].children:
+                folder_nodes_by_slug.pop(f_slug)
+                # If it was nested, removing it doesn't matter; if it was
+                # at root it just doesn't appear. Either way safe.
+
+        # Root folders are those NOT nested inside another folder.
+        root_folders = [
+            folder_nodes_by_slug[slug]
+            for slug in folders_by_slug
+            if slug in folder_nodes_by_slug and slug not in nested_folder_slugs
+        ]
+
+        # Build the new root order: root folders first (in plan order),
+        # then the original root nodes not consumed by any folder
+        # (preserves fixed pages and unassigned topics).
+        new_pages: list[WikiPageNode] = list(root_folders) + [
             n for n in original_order if n.slug not in consumed_slugs
         ]
 
@@ -4280,47 +4311,100 @@ class WikiCompiler:
         ``leaves_by_slug`` maps each leaf slug → its compiled WikiPage
         (the existing ``compile`` output, keyed by slug).
 
-        Returns a dict ``{folder_id: WikiPage}`` with one entry per
-        folder in the plan. Folders nest only one level deep in v1
-        (the planner is constrained to depth 4 but folder→folder
-        nesting is rare); deeper nesting falls back to flat with a
-        log warning.
+        Handles **nested folders** — the planner is constrained to
+        depth 4, so a folder may contain other folders. Topological
+        sort: process folders whose children are all already-resolved
+        (leaves OR previously-compiled folders) first; iterate until
+        no more progress is made. Folders that reference children we
+        cannot resolve (typically because an upstream topic compile
+        failed) are skipped with a log line.
 
-        When ``plan`` has no folders this method returns an empty dict
-        (no LLM calls — cheap no-op).
+        Returns a dict ``{folder_id: WikiPage}`` with one entry per
+        successfully synthesized folder. When ``plan`` has no folders
+        this method returns an empty dict (no LLM calls — cheap no-op).
         """
         folders = list(getattr(plan, "folders", None) or [])
         if not folders:
             return {}
 
+        # Build a slug → folder spec lookup for the topological pass.
+        folders_by_slug: dict[str, Any] = {}
+        for f in folders:
+            f_slug = getattr(f, "slug", None) or ""
+            if f_slug:
+                folders_by_slug[f_slug] = f
+
         out: dict[str, WikiPage] = {}
-        for folder in folders:
-            f_slug = getattr(folder, "slug", None) or ""
-            f_title = getattr(folder, "title", None) or f_slug.replace("-", " ").title()
-            child_slugs = list(getattr(folder, "child_slugs", None) or [])
-            if not f_slug or not child_slugs:
-                continue
-            children_pages: list[WikiPage] = []
-            for cs in child_slugs:
-                page = leaves_by_slug.get(cs)
-                if page is None:
-                    # Could be a nested folder slug we haven't compiled yet
-                    # (folder→folder). v1 doesn't deeply nest; skip with log.
-                    logger.warning(
-                        "wiki_compiler_folder_missing_child folder=%s child=%s",
-                        f_slug,
-                        cs,
-                    )
+        # Reverse-lookup: folder slug → already-compiled WikiPage. Used
+        # by outer folders so they can see their inner-folder children.
+        folder_pages_by_slug: dict[str, WikiPage] = {}
+
+        # Topological sort: keep iterating while we make progress.
+        # Each pass synthesizes folders whose children are now ALL
+        # resolvable (in leaves_by_slug OR folder_pages_by_slug). When
+        # a pass produces nothing new, we stop.
+        remaining: dict[str, Any] = dict(folders_by_slug)
+        max_passes = len(remaining) + 2  # safety bound for cycles
+        passes = 0
+        while remaining and passes < max_passes:
+            passes += 1
+            ready_now: list[tuple[str, Any]] = []
+            for f_slug, folder in remaining.items():
+                child_slugs = list(getattr(folder, "child_slugs", None) or [])
+                if not child_slugs:
+                    # Empty folder — skip.
                     continue
-                children_pages.append(page)
-            if not children_pages:
-                continue
-            folder_page = await self._compile_folder_page(
-                folder_slug=f_slug,
-                folder_title=f_title,
-                children_pages=children_pages,
-            )
-            out[folder_page.id] = folder_page
+                # Check every child resolves (in leaves OR already-compiled folders).
+                all_ready = True
+                for cs in child_slugs:
+                    if cs in leaves_by_slug:
+                        continue
+                    if cs in folder_pages_by_slug:
+                        continue
+                    if cs in folders_by_slug and cs not in folder_pages_by_slug:
+                        # Inner folder not yet compiled — defer.
+                        all_ready = False
+                        break
+                    # Truly missing — neither a leaf nor a folder we know.
+                    # Don't block on it; we'll log later.
+                if all_ready:
+                    ready_now.append((f_slug, folder))
+
+            if not ready_now:
+                # No folder is fully ready — accept the remaining ones
+                # with their resolvable children only (skip un-resolvable).
+                # This handles the case where some children genuinely
+                # don't exist (compile failures upstream) — better to
+                # produce a partial folder than no folder.
+                for f_slug, folder in remaining.items():
+                    ready_now.append((f_slug, folder))
+
+            for f_slug, folder in ready_now:
+                f_title = getattr(folder, "title", None) or f_slug.replace("-", " ").title()
+                child_slugs = list(getattr(folder, "child_slugs", None) or [])
+                children_pages: list[WikiPage] = []
+                for cs in child_slugs:
+                    page = leaves_by_slug.get(cs) or folder_pages_by_slug.get(cs)
+                    if page is None:
+                        logger.warning(
+                            "wiki_compiler_folder_missing_child folder=%s child=%s",
+                            f_slug,
+                            cs,
+                        )
+                        continue
+                    children_pages.append(page)
+                if not children_pages:
+                    # Nothing resolvable — drop the folder entirely.
+                    remaining.pop(f_slug, None)
+                    continue
+                folder_page = await self._compile_folder_page(
+                    folder_slug=f_slug,
+                    folder_title=f_title,
+                    children_pages=children_pages,
+                )
+                out[folder_page.id] = folder_page
+                folder_pages_by_slug[f_slug] = folder_page
+                remaining.pop(f_slug, None)
         return out
 
     def build_structure(
