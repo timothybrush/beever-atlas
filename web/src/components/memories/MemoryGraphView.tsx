@@ -7,6 +7,7 @@ import { GraphFilters } from "@/components/graph/GraphFilters";
 import { GraphCanvas } from "@/components/graph/GraphCanvas";
 import { EntityPanel } from "@/components/graph/EntityPanel";
 import { MediaModal } from "@/components/graph/MediaModal";
+import { FullscreenWrapper } from "@/components/shared/FullscreenWrapper";
 
 const MEDIA_TYPES = new Set(["Link", "Document", "Image", "Media"]);
 
@@ -102,24 +103,29 @@ export function MemoryGraphView({ channelId }: Props) {
       <div className="flex items-center justify-between border-b border-border bg-card/60 px-5 py-2">
         <GraphFilters entityTypes={entityTypes} selected={visibleTypes} onChange={setVisibleTypes} />
       </div>
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        <GraphCanvas
-          entities={entities}
-          relationships={relationships}
-          visibleTypes={visibleTypes}
-          selectedEntityId={selectedId}
-          onSelectEntity={handleSelectEntity}
-        />
-        {selectedEntity && (
-          <EntityPanel
-            entity={selectedEntity}
+      {/* Wrap the canvas + selection panel so Enlarge spans both. The
+          wrapper takes care of the fullscreen overlay; cytoscape's
+          ResizeObserver in GraphCanvas handles the layout reflow. */}
+      <FullscreenWrapper label="Enlarge graph" className="flex-1 min-h-0">
+        <div className="flex h-full w-full min-h-0 overflow-hidden">
+          <GraphCanvas
+            entities={entities}
             relationships={relationships}
-            allEntities={entities}
-            channelId={channelId}
-            onClose={() => setSelectedId(null)}
+            visibleTypes={visibleTypes}
+            selectedEntityId={selectedId}
+            onSelectEntity={handleSelectEntity}
           />
-        )}
-      </div>
+          {selectedEntity && (
+            <EntityPanel
+              entity={selectedEntity}
+              relationships={relationships}
+              allEntities={entities}
+              channelId={channelId}
+              onClose={() => setSelectedId(null)}
+            />
+          )}
+        </div>
+      </FullscreenWrapper>
       {mediaModal && (
         <MediaModal
           name={mediaModal.name}

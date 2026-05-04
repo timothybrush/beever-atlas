@@ -9,6 +9,7 @@ import { RefreshCw, BookOpen, AlertTriangle, Sparkles, Network, FileText, Loader
 // bundle-weight contract).
 const WikiGraph = lazy(() => import("@/components/wiki/WikiGraph"));
 import { PipelineEmptyState } from "@/components/shared/PipelineEmptyState";
+import { FullscreenWrapper } from "@/components/shared/FullscreenWrapper";
 import { useWiki } from "@/hooks/useWiki";
 import { useExtractionStatus } from "@/hooks/useExtractionStatus";
 import { useWikiPage } from "@/hooks/useWikiPage";
@@ -786,19 +787,23 @@ export function WikiTab() {
   if (view === "graph") {
     // Wiki cross-link graph view — lazy-loaded so cytoscape stays out
     // of the wiki tab's main bundle until the operator toggles in.
+    // Wrapped in FullscreenWrapper so the operator can enlarge the
+    // canvas without losing the in-tab chrome.
     pageContent = (
-      <Suspense
-        fallback={
-          <div
-            className="flex h-full items-center justify-center text-sm text-muted-foreground"
-            data-testid="wiki-graph-suspense"
-          >
-            Loading graph view…
-          </div>
-        }
-      >
-        <WikiGraph channelId={channelId} />
-      </Suspense>
+      <FullscreenWrapper label="Enlarge graph">
+        <Suspense
+          fallback={
+            <div
+              className="flex h-full items-center justify-center text-sm text-muted-foreground"
+              data-testid="wiki-graph-suspense"
+            >
+              Loading graph view…
+            </div>
+          }
+        >
+          <WikiGraph channelId={channelId} />
+        </Suspense>
+      </FullscreenWrapper>
     );
   } else if (showPageLoading) {
     pageContent = (
