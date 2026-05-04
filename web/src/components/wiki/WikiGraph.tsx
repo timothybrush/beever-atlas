@@ -194,8 +194,11 @@ function buildElements(filtered: WikiGraphPayload): unknown[] {
         // the mouseover handler).
         displayLabel: _truncateLabel(rawLabel),
         color: colorForNode(node),
-        nodeSize: isChannel ? 64 : isEntity ? 30 : 36,
-        labelSize: isChannel ? 16 : 12,
+        // Larger nodes make click targets actually clickable on a
+        // dispersed cose layout. Hub remains the visually-dominant
+        // anchor at 72px.
+        nodeSize: isChannel ? 72 : isEntity ? 40 : 48,
+        labelSize: isChannel ? 18 : 13,
         labelWeight: isChannel ? 700 : 500,
       },
     });
@@ -305,6 +308,11 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
         (event: string, handler: (e: CyTapEvent) => void): void;
         (event: string, selector: string, handler: (e: CyTapEvent) => void): void;
       };
+      fit: (eles?: unknown, padding?: number) => void;
+      zoom: (level?: number) => number;
+      minZoom: (level: number) => void;
+      maxZoom: (level: number) => void;
+      container: () => HTMLElement;
       destroy: () => void;
     };
     let cy: CyInstance | null = null;
@@ -377,6 +385,17 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               style: {
                 "border-color": "#fbbf24",
                 "border-width": 3,
+              },
+            },
+            {
+              // Hover affordance — node bumps + edge highlights so the
+              // operator can see the click target clearly before
+              // committing.
+              selector: "node:active",
+              style: {
+                "border-width": 3,
+                "border-color": "#facc15",
+                "overlay-opacity": 0,
               },
             },
             {
@@ -468,17 +487,20 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
                 : layout === "grid"
                   ? { name: "grid", animate: false, padding: 40 }
                   : {
+                      // Cose tuned for ~70 nodes on a typical channel.
+                      // Earlier attempt at very high nodeRepulsion
+                      // pushed nodes so far apart that ``fit:true``
+                      // crushed them into tiny dots. These values give
+                      // Obsidian-style spacing without that scale-down.
                       name: "cose",
                       animate: false,
-                      // Generous spring length + vertex repulsion so the
-                      // 60+ wiki nodes spread out instead of crushing
-                      // labels into each other.
-                      idealEdgeLength: 140,
-                      nodeOverlap: 24,
-                      nodeRepulsion: 8_000_000,
-                      edgeElasticity: 60,
-                      gravity: 0.15,
-                      padding: 60,
+                      idealEdgeLength: 90,
+                      nodeOverlap: 12,
+                      nodeRepulsion: 400_000,
+                      edgeElasticity: 80,
+                      gravity: 0.4,
+                      numIter: 1500,
+                      padding: 50,
                       fit: true,
                     },
         });
@@ -498,7 +520,27 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               edges: () => { addClass: (c: string) => void };
             };
           };
+          fit: (eles?: unknown, padding?: number) => void;
+          zoom: (level?: number) => number;
+          minZoom: (level: number) => void;
+          maxZoom: (level: number) => void;
+          container: () => HTMLElement;
         };
+        // Cap zoom-out so cose's dispersion never crushes labels into
+        // dots. Cap zoom-in for trackpad-pinch sanity.
+        cyAny.minZoom(0.3);
+        cyAny.maxZoom(2.5);
+        cyAny.fit(undefined, 60);
+        // If cose pushed the zoom below 0.6, scale back up so labels
+        // are readable. Trades graph-area-coverage for legibility.
+        const z = cyAny.zoom();
+        if (z < 0.6) cyAny.zoom(0.6);
+        // Pointer cursor over nodes signals interactivity.
+        try {
+          cyAny.container().style.cursor = "default";
+        } catch {
+          /* no-op when container() returns nothing in a teardown race */
+        }
         const clearHighlights = () => {
           cyAny.elements().removeClass("dimmed highlighted neighbor");
         };
@@ -546,6 +588,23 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
             e as unknown as { target: { data: () => Record<string, unknown> } }
           ).target.data();
           handleNodeDoubleTapRef.current(data);
+        });
+        // Hover affordance — pointer cursor flips on, the node grows
+        // 1.15x so the click target is visually obvious. Restored on
+        // mouseout.
+        cy.on("mouseover", "node", () => {
+          try {
+            cyAny.container().style.cursor = "pointer";
+          } catch {
+            /* no-op */
+          }
+        });
+        cy.on("mouseout", "node", () => {
+          try {
+            cyAny.container().style.cursor = "default";
+          } catch {
+            /* no-op */
+          }
         });
         cyRef.current = cy;
         setCytoscapeReady(true);
