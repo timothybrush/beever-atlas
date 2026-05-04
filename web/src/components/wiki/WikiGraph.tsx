@@ -156,48 +156,47 @@ function buildLabel(node: WikiGraphNode): string {
 // Page icon: a simple corner-fold document shape, stroked white.
 // Hub icon:  a Notion-style "stack of pages" that reads as "workspace root".
 
-// Page icon: a soft filled-paper glyph with folded corner + three
-// content bars. Filled shapes (rather than the previous all-stroked
-// outline) read MUCH better at the 78×52 card size — the eye locks
-// onto the silhouette instantly. White at 95% on the colored card
-// background; corner-fold cut with a subtle shadow gradient.
+// Page icon: a centered, modern Notion-style document glyph. Designed
+// to sit dead-center inside a circular node — the previous version
+// drew off-center because the source SVG had asymmetric padding and
+// the dog-ear pulled visual weight to the upper-right. This one is
+// symmetrically placed within a 24×24 viewBox so cytoscape's
+// background-fit "contain" centers it perfectly.
+//
+// Visual: filled rounded rectangle (paper body) with a subtle
+// fold-corner notch and two soft content lines. White paper-fill at
+// 96% alpha against the kind-color background; content lines in
+// 38% black so the page reads as paper-with-text at any zoom.
 const PAGE_ICON_SVG = encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-    // Outer page body — main filled shape with rounded edges + cut corner.
-    // The path is a rounded rect with the top-right corner replaced by a
-    // diagonal that goes (15,3) → (21,9), creating the dog-ear shape.
-    '<path d="M5 4 a1.5 1.5 0 0 1 1.5 -1.5 h9 L21 8.5 V20 a1.5 1.5 0 0 1 -1.5 1.5 H6.5 a1.5 1.5 0 0 1 -1.5 -1.5 z" ' +
-    'fill="rgba(255,255,255,0.95)"/>' +
-    // Folded-corner triangle on the dog-ear, slightly darker so it reads
-    // as a folded flap, not just a flat cut.
-    '<path d="M15 3 V8.5 H21 z" fill="rgba(255,255,255,0.55)"/>' +
-    // Three content lines as filled rounded rects (cleaner than strokes
-    // at small sizes). Vary widths so they hint at "real text content".
-    '<rect x="8" y="11" width="8" height="1.3" rx="0.65" fill="rgba(0,0,0,0.42)"/>' +
-    '<rect x="8" y="14" width="9" height="1.3" rx="0.65" fill="rgba(0,0,0,0.42)"/>' +
-    '<rect x="8" y="17" width="6" height="1.3" rx="0.65" fill="rgba(0,0,0,0.42)"/>' +
+    // Paper body — symmetrically centered in 24×24, leaving 4 px
+    // gutter all around so the icon doesn't kiss the disc edge.
+    // Top-right corner clipped at 15→19,8 to suggest a fold without
+    // weighting the silhouette.
+    '<path d="M6 4 a1.6 1.6 0 0 1 1.6 -1.6 h7.4 L19 8 V18.4 a1.6 1.6 0 0 1 -1.6 1.6 H7.6 a1.6 1.6 0 0 1 -1.6 -1.6 z" ' +
+    'fill="rgba(255,255,255,0.96)"/>' +
+    // Subtle inner shadow on the fold flap
+    '<path d="M15 2.4 V8 H19 z" fill="rgba(0,0,0,0.18)"/>' +
+    // Two content bars (centered horizontally on the page body)
+    '<rect x="8.5" y="11.5" width="8" height="1.3" rx="0.65" fill="rgba(15,23,42,0.42)"/>' +
+    '<rect x="8.5" y="14.5" width="6" height="1.3" rx="0.65" fill="rgba(15,23,42,0.42)"/>' +
     '</svg>',
 );
 const PAGE_ICON_URL = `data:image/svg+xml;utf8,${PAGE_ICON_SVG}`;
 
-// Hub icon: stack of three pages — visual "workspace root" affordance.
-// Pages stack offset to suggest depth; topmost page is fully opaque and
-// has the same dog-ear so the metaphor connects to the page-icon glyph.
+// Hub icon: a clean folder/binder glyph with the same fill language
+// as the page icon. Reads as "container of pages" rather than a
+// confusing stack-of-papers. Symmetric inside 24×24.
 const HUB_ICON_SVG = encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
-    // Back page (most translucent) — slight rotation via offset
-    '<path d="M5 7 a1 1 0 0 1 1 -1 h9 l3 3 v9 a1 1 0 0 1 -1 1 H6 a1 1 0 0 1 -1 -1 z" ' +
-    'fill="rgba(255,255,255,0.45)"/>' +
-    // Middle page — slightly opaque
-    '<path d="M4 5 a1 1 0 0 1 1 -1 h9 l3 3 v9 a1 1 0 0 1 -1 1 H5 a1 1 0 0 1 -1 -1 z" ' +
-    'fill="rgba(255,255,255,0.7)"/>' +
-    // Front page — fully solid with dog-ear
-    '<path d="M3 3 a1 1 0 0 1 1 -1 h9 l3 3 v9 a1 1 0 0 1 -1 1 H4 a1 1 0 0 1 -1 -1 z" ' +
-    'fill="rgba(255,255,255,0.98)"/>' +
-    '<path d="M13 2 V5 H16 z" fill="rgba(255,255,255,0.55)"/>' +
-    // Two content lines on the front page
-    '<rect x="6" y="9" width="6" height="1.2" rx="0.6" fill="rgba(0,0,0,0.4)"/>' +
-    '<rect x="6" y="11.5" width="5" height="1.2" rx="0.6" fill="rgba(0,0,0,0.4)"/>' +
+    // Folder body — soft rounded rect with the tab on top.
+    '<path d="M3.5 7.6 a1.6 1.6 0 0 1 1.6 -1.6 h4.4 l1.6 1.6 h9.4 a1.6 1.6 0 0 1 1.6 1.6 V18.4 a1.6 1.6 0 0 1 -1.6 1.6 H5.1 a1.6 1.6 0 0 1 -1.6 -1.6 z" ' +
+    'fill="rgba(255,255,255,0.96)"/>' +
+    // Inner shadow on the tab fold line for depth
+    '<path d="M3.5 9.6 H20.5" stroke="rgba(15,23,42,0.18)" stroke-width="0.7"/>' +
+    // Two content bars on the folder body
+    '<rect x="8" y="13" width="8" height="1.3" rx="0.65" fill="rgba(15,23,42,0.4)"/>' +
+    '<rect x="8" y="15.6" width="6" height="1.3" rx="0.65" fill="rgba(15,23,42,0.4)"/>' +
     '</svg>',
 );
 const HUB_ICON_URL = `data:image/svg+xml;utf8,${HUB_ICON_SVG}`;
@@ -229,12 +228,16 @@ function buildElements(filtered: WikiGraphPayload): unknown[] {
         kindKey,
         clusterKey,
         // Dimensions: bigger cards so titles are readable.
-        // Channel hub: large octagonal disc.
-        // Wiki page: 78×52 rounded card — fits ~22-char label at 12px.
-        // Entity: small dot (not the focus of this view).
-        nodeShape: isEntity ? "ellipse" : "round-rectangle",
-        nodeWidth: isChannel ? 68 : isWiki ? 78 : 14,
-        nodeHeight: isChannel ? 68 : isWiki ? 52 : 14,
+        // Round-disc nodes (request: round shape, centered icon).
+        // The square-card form clipped icons off-center; equal w=h
+        // with shape=ellipse gives a clean circle and the
+        // background-image centers automatically.
+        // Channel hub: 72 px disc — workspace root.
+        // Wiki page:   60 px disc — readable + room for caption below.
+        // Entity:      14 px dot  — peripheral, not the focus here.
+        nodeShape: "ellipse",
+        nodeWidth: isChannel ? 72 : isWiki ? 60 : 14,
+        nodeHeight: isChannel ? 72 : isWiki ? 60 : 14,
         icon: isChannel ? HUB_ICON_URL : isWiki ? PAGE_ICON_URL : "",
         labelSize: isChannel ? 13 : isWiki ? 12 : 9,
         labelWeight: isChannel ? 700 : 500,
@@ -522,13 +525,22 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
                 "background-image": "data(icon)",
                 "background-fit": "contain",
                 "background-image-opacity": 0.95,
-                "background-width": "45%",
-                "background-height": "55%",
+                // Explicit centering — previous values (45% w / 55%
+                // h, no position) drew the icon off-center because
+                // cytoscape's default ``background-position-x`` is
+                // 50% but ``-y`` defaults to 50% too, yet asymmetric
+                // image-w/h still pulls the visual center off-axis
+                // for non-square nodes. Equal 56% on both axes +
+                // explicit 50%/50% positioning keeps the glyph on
+                // the disc's geometric center.
+                "background-width": "56%",
+                "background-height": "56%",
+                "background-position-x": "50%",
+                "background-position-y": "50%",
                 width: "data(nodeWidth)" as unknown as number,
                 height: "data(nodeHeight)" as unknown as number,
                 "border-width": 1,
                 "border-color": "rgba(255,255,255,0.10)",
-                "corner-radius": 6,
                 "transition-property": "opacity, border-color, border-width",
                 "transition-duration": 150,
               } as unknown as cytoscape.Css.Node,
@@ -1325,6 +1337,14 @@ interface WikiGraphPanelProps {
   onClose: () => void;
 }
 
+// Panel resize bounds — narrow enough to use as a peek pane, wide
+// enough to read long wiki content. Persisted to localStorage so the
+// operator's preference sticks across sessions.
+const PANEL_MIN_W = 280;
+const PANEL_MAX_W = 720;
+const PANEL_DEFAULT_W = 448;
+const PANEL_LS_KEY = "wiki.graph.panelWidth";
+
 function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) {
   const navigate = useNavigate();
   const wantsPageFetch = !selection.isChannel && !selection.isEntity && !!selection.pageId;
@@ -1342,16 +1362,75 @@ function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) 
     );
   };
 
-  const wide = wantsPageFetch && (page || isPageLoading);
-  const widthClass = wide ? "w-[28rem] lg:w-[34rem]" : "w-80";
+  // Resizable width state — pixel-controlled instead of Tailwind class
+  // so the user can drag the left edge. Initialised from localStorage
+  // (falls back to default), clamped on every read.
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    try {
+      const raw = window.localStorage.getItem(PANEL_LS_KEY);
+      if (!raw) return PANEL_DEFAULT_W;
+      const n = parseInt(raw, 10);
+      if (!Number.isFinite(n)) return PANEL_DEFAULT_W;
+      return Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, n));
+    } catch {
+      return PANEL_DEFAULT_W;
+    }
+  });
+
+  // Drag handle: pointer events on a thin strip on the LEFT edge of
+  // the panel. We track from the initial pointerdown clientX and
+  // update width by the negative delta (dragging left widens the
+  // panel since it's on the right side of the screen).
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = panelWidth;
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const next = Math.min(PANEL_MAX_W, Math.max(PANEL_MIN_W, startW - dx));
+      setPanelWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      try {
+        window.localStorage.setItem(PANEL_LS_KEY, String(panelWidth));
+      } catch {
+        /* ignore localStorage errors */
+      }
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  // Persist on every settled width change.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PANEL_LS_KEY, String(panelWidth));
+    } catch {
+      /* ignore localStorage errors */
+    }
+  }, [panelWidth]);
 
   return (
     <aside
-      className={`${widthClass} shrink-0 border-l border-border bg-card/95 overflow-y-auto shadow-2xl backdrop-blur-sm`}
+      className="relative shrink-0 border-l border-border bg-card/95 overflow-y-auto shadow-2xl backdrop-blur-sm"
+      style={{ width: `${panelWidth}px` }}
       role="complementary"
       aria-label="Wiki graph node details"
       data-testid="wiki-graph-panel"
     >
+      {/* Resize handle — 4 px wide on the left edge. ``cursor:
+          col-resize`` + a hairline visual hint. The drag widens or
+          narrows via setPanelWidth. */}
+      <div
+        onPointerDown={handlePointerDown}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panel"
+        className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize bg-transparent hover:bg-primary/40 active:bg-primary/60 z-20"
+        data-testid="wiki-graph-panel-resize"
+      />
       <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-card/95 px-4 py-3 backdrop-blur-sm">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {selection.isChannel
