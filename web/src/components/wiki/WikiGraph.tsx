@@ -156,29 +156,48 @@ function buildLabel(node: WikiGraphNode): string {
 // Page icon: a simple corner-fold document shape, stroked white.
 // Hub icon:  a Notion-style "stack of pages" that reads as "workspace root".
 
+// Page icon: a soft filled-paper glyph with folded corner + three
+// content bars. Filled shapes (rather than the previous all-stroked
+// outline) read MUCH better at the 78×52 card size — the eye locks
+// onto the silhouette instantly. White at 95% on the colored card
+// background; corner-fold cut with a subtle shadow gradient.
 const PAGE_ICON_SVG = encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" ' +
-    'stroke="rgba(255,255,255,0.9)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
-    // Page body
-    '<rect x="4" y="2" width="10" height="14" rx="1.5"/>' +
-    // Fold corner cut
-    '<path d="M10 2 L14 6"/>' +
-    '<path d="M10 2 L10 6 L14 6" stroke-width="1.2" stroke-linejoin="round"/>' +
-    // Content lines
-    '<line x1="6.5" y1="9" x2="11.5" y2="9"/>' +
-    '<line x1="6.5" y1="11.5" x2="10" y2="11.5"/>' +
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+    // Outer page body — main filled shape with rounded edges + cut corner.
+    // The path is a rounded rect with the top-right corner replaced by a
+    // diagonal that goes (15,3) → (21,9), creating the dog-ear shape.
+    '<path d="M5 4 a1.5 1.5 0 0 1 1.5 -1.5 h9 L21 8.5 V20 a1.5 1.5 0 0 1 -1.5 1.5 H6.5 a1.5 1.5 0 0 1 -1.5 -1.5 z" ' +
+    'fill="rgba(255,255,255,0.95)"/>' +
+    // Folded-corner triangle on the dog-ear, slightly darker so it reads
+    // as a folded flap, not just a flat cut.
+    '<path d="M15 3 V8.5 H21 z" fill="rgba(255,255,255,0.55)"/>' +
+    // Three content lines as filled rounded rects (cleaner than strokes
+    // at small sizes). Vary widths so they hint at "real text content".
+    '<rect x="8" y="11" width="8" height="1.3" rx="0.65" fill="rgba(0,0,0,0.42)"/>' +
+    '<rect x="8" y="14" width="9" height="1.3" rx="0.65" fill="rgba(0,0,0,0.42)"/>' +
+    '<rect x="8" y="17" width="6" height="1.3" rx="0.65" fill="rgba(0,0,0,0.42)"/>' +
     '</svg>',
 );
 const PAGE_ICON_URL = `data:image/svg+xml;utf8,${PAGE_ICON_SVG}`;
 
+// Hub icon: stack of three pages — visual "workspace root" affordance.
+// Pages stack offset to suggest depth; topmost page is fully opaque and
+// has the same dog-ear so the metaphor connects to the page-icon glyph.
 const HUB_ICON_SVG = encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" ' +
-    'stroke="rgba(255,255,255,0.95)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
-    // Three stacked pages (Notion-style)
-    '<rect x="5" y="6" width="10" height="11" rx="1.5"/>' +
-    '<path d="M7 6 V4.5 a1.5 1.5 0 0 1 1.5-1.5 h5 a1.5 1.5 0 0 1 1.5 1.5 V6" stroke-width="1.3"/>' +
-    '<line x1="7.5" y1="10" x2="12.5" y2="10"/>' +
-    '<line x1="7.5" y1="12.5" x2="11" y2="12.5"/>' +
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">' +
+    // Back page (most translucent) — slight rotation via offset
+    '<path d="M5 7 a1 1 0 0 1 1 -1 h9 l3 3 v9 a1 1 0 0 1 -1 1 H6 a1 1 0 0 1 -1 -1 z" ' +
+    'fill="rgba(255,255,255,0.45)"/>' +
+    // Middle page — slightly opaque
+    '<path d="M4 5 a1 1 0 0 1 1 -1 h9 l3 3 v9 a1 1 0 0 1 -1 1 H5 a1 1 0 0 1 -1 -1 z" ' +
+    'fill="rgba(255,255,255,0.7)"/>' +
+    // Front page — fully solid with dog-ear
+    '<path d="M3 3 a1 1 0 0 1 1 -1 h9 l3 3 v9 a1 1 0 0 1 -1 1 H4 a1 1 0 0 1 -1 -1 z" ' +
+    'fill="rgba(255,255,255,0.98)"/>' +
+    '<path d="M13 2 V5 H16 z" fill="rgba(255,255,255,0.55)"/>' +
+    // Two content lines on the front page
+    '<rect x="6" y="9" width="6" height="1.2" rx="0.6" fill="rgba(0,0,0,0.4)"/>' +
+    '<rect x="6" y="11.5" width="5" height="1.2" rx="0.6" fill="rgba(0,0,0,0.4)"/>' +
     '</svg>',
 );
 const HUB_ICON_URL = `data:image/svg+xml;utf8,${HUB_ICON_SVG}`;
@@ -814,13 +833,86 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
           handleNodeDoubleTapRef.current(data);
         });
 
-        // Hover cursor feedback
-        cy.on("mouseover", "node", () => {
+        // Hover float — node grows ~10% over 180 ms ease-out, shrinks
+        // back over 130 ms ease-in. Same pattern as the entity graph
+        // for a consistent feel across the two surfaces. ``stop(true,
+        // false)`` chains so rapid mouseover/out doesn't fight.
+        cy.on("mouseover", "node", (e) => {
           try { cyAny.container().style.cursor = "pointer"; } catch { /* no-op */ }
+          const node = (e as unknown as {
+            target: {
+              data: () => Record<string, unknown>;
+              stop: (a: boolean, b: boolean) => { animate: (s: unknown, o: unknown) => void };
+            };
+          }).target;
+          const baseW = (node.data().nodeWidth as number) ?? 0;
+          const baseH = (node.data().nodeHeight as number) ?? 0;
+          if (baseW > 0 && baseH > 0) {
+            node.stop(true, false).animate(
+              { style: { width: baseW * 1.1, height: baseH * 1.1 } },
+              { duration: 180, easing: "ease-out-cubic" },
+            );
+          }
         });
-        cy.on("mouseout", "node", () => {
+        cy.on("mouseout", "node", (e) => {
           try { cyAny.container().style.cursor = "default"; } catch { /* no-op */ }
+          const node = (e as unknown as {
+            target: {
+              data: () => Record<string, unknown>;
+              stop: (a: boolean, b: boolean) => { animate: (s: unknown, o: unknown) => void };
+            };
+          }).target;
+          const baseW = (node.data().nodeWidth as number) ?? 0;
+          const baseH = (node.data().nodeHeight as number) ?? 0;
+          if (baseW > 0 && baseH > 0) {
+            node.stop(true, false).animate(
+              { style: { width: baseW, height: baseH } },
+              { duration: 130, easing: "ease-in-cubic" },
+            );
+          }
         });
+
+        // Hub pulse — subtle breathing animation on the channel hub so
+        // the eye knows where the workspace root is even when zoomed
+        // out. Toggles +6% scale on a 1800 ms loop. Stops cleanly when
+        // cytoscape is destroyed because the closure captures ``alive``.
+        const hubPulse = () => {
+          if (!alive || !cy) return;
+          const hub = (cy as unknown as {
+            $: (s: string) => { length: number; data: () => Record<string, unknown>; animate: (s: unknown, o: unknown) => void };
+          }).$("node[kind = 'channel']");
+          if (hub.length === 0) {
+            window.setTimeout(hubPulse, 1800);
+            return;
+          }
+          const baseW = (hub.data().nodeWidth as number) ?? 0;
+          const baseH = (hub.data().nodeHeight as number) ?? 0;
+          if (baseW <= 0 || baseH <= 0) return;
+          hub.animate(
+            { style: { width: baseW * 1.06, height: baseH * 1.06 } },
+            {
+              duration: 900,
+              easing: "ease-in-out-cubic",
+              complete: () => {
+                if (!alive || !cy) return;
+                hub.animate(
+                  { style: { width: baseW, height: baseH } },
+                  {
+                    duration: 900,
+                    easing: "ease-in-out-cubic",
+                    complete: () => {
+                      if (!alive) return;
+                      window.setTimeout(hubPulse, 600);
+                    },
+                  },
+                );
+              },
+            },
+          );
+        };
+        // Kick off the pulse after the layout settles so it doesn't
+        // fight the initial fcose animation.
+        window.setTimeout(hubPulse, 1200);
 
         cyRef.current = cy;
         setCytoscapeReady(true);
