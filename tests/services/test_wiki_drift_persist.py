@@ -222,3 +222,82 @@ def test_ttl_index_constants_documented():
     assert "expireAfterSeconds=2592000" in text
     # Compound index documented.
     assert "wiki_drift_reports_channel_ts" in text
+
+
+# ---------------------------------------------------------------------------
+# wiki-llm-native-redesign §8.7 — kind round-trips through compare + persist
+# ---------------------------------------------------------------------------
+
+
+async def test_drift_report_carries_kind_from_incremental_page() -> None:
+    """A DriftReport computed from a kind="entity" WikiPage carries
+    kind="entity" all the way through to the persisted document so the
+    aggregator's per-kind facet has data to bucket on."""
+    reports = _FakeWikiDriftReports()
+    fake_mongo = _FakeMongo(reports)
+    init_stores(SimpleNamespace(mongodb=fake_mongo))
+
+    inc = WikiPage(
+        channel_id="C1",
+        target_lang="en",
+        page_id="entity:alice",
+        title="Alice",
+        slug="entity-alice",
+        kind="entity",
+        sections=[WikiPageSection(id="overview", title="Overview", content_md="x")],
+    )
+    regen = WikiPage(
+        channel_id="C1",
+        target_lang="en",
+        page_id="entity:alice",
+        title="Alice",
+        slug="entity-alice",
+        kind="entity",
+        sections=[WikiPageSection(id="overview", title="Overview", content_md="x")],
+    )
+
+    async def _inc_factory() -> WikiPage:
+        return inc
+
+    async def _regen_factory() -> WikiPage:
+        return regen
+
+    report = await compare_apply_update_vs_regenerate(
+        channel_id="C1",
+        page_id="entity:alice",
+        incremental_factory=_inc_factory,
+        regenerate_factory=_regen_factory,
+    )
+    assert report is not None
+    assert isinstance(report, DriftReport)
+    assert report.kind == "entity"
+    # And the persisted doc carries the field through too.
+    assert reports.docs, "drift report was not persisted"
+    assert reports.docs[0].get("kind") == "entity"
+
+
+async def test_drift_report_kind_falls_back_to_empty_when_absent() -> None:
+    """A WikiPage missing the redesign field (legacy row, model default)
+    yields kind="topic" — but we accept "" too so the aggregator buckets
+    legacy rows separately rather than counting them as topic falsely.
+    """
+    # Use SimpleNamespace WikiPage-shaped object missing ``kind``.
+    inc = SimpleNamespace(
+        title="A",
+        sections=[WikiPageSection(id="overview", title="Overview", content_md="x")],
+    )
+    regen = SimpleNamespace(
+        title="A",
+        sections=[WikiPageSection(id="overview", title="Overview", content_md="x")],
+    )
+    from beever_atlas.services.wiki_drift_comparator import compute_drift_report
+
+    report = compute_drift_report(
+        channel_id="C1",
+        page_id="topic:a",
+        incremental=inc,  # type: ignore[arg-type]
+        regenerate=regen,  # type: ignore[arg-type]
+        incremental_ms=1,
+        regenerate_ms=1,
+    )
+    assert report.kind == ""

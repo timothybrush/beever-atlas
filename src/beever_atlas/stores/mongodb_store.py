@@ -1369,6 +1369,8 @@ class MongoDBStore:
                     "regenerate_ms",
                     "incremental_section_count",
                     "regenerate_section_count",
+                    # ``wiki-llm-native-redesign`` §8.2 — kind facet
+                    "kind",
                 )
                 if hasattr(report, k)
             }
@@ -1387,11 +1389,20 @@ class MongoDBStore:
         import statistics
 
         cutoff = datetime.now(tz=UTC) - timedelta(days=max(1, days))
+        # Group by both channel_id AND kind so the per-kind facets (added
+        # by the wiki-llm-native-redesign §8.3 ship) come out of the same
+        # pipeline pass — one extra dimension on the group key, no extra
+        # round-trip. Channel-level totals are derived in the Python
+        # post-aggregate so the per-kind buckets always sum to the
+        # channel total.
         pipeline: list[dict[str, Any]] = [
             {"$match": {"ts": {"$gte": cutoff}}},
             {
                 "$group": {
-                    "_id": "$channel_id",
+                    "_id": {
+                        "channel_id": "$channel_id",
+                        "kind": {"$ifNull": ["$kind", ""]},
+                    },
                     "page_count": {"$sum": 1},
                     "section_p50_values": {"$push": "$levenshtein_section_p50"},
                     "section_p95_values": {"$push": "$levenshtein_section_p95"},
@@ -1399,8 +1410,12 @@ class MongoDBStore:
                 }
             },
         ]
-        out: list[dict[str, Any]] = []
+        # Channel → {totals, per_kind: {kind: {p50_median, p95_median, page_count, last_run_ts}}}
+        per_channel: dict[str, dict[str, Any]] = {}
         async for row in self._wiki_drift_reports.aggregate(pipeline):
+            key = row.get("_id") or {}
+            channel_id = str(key.get("channel_id") or "") if isinstance(key, dict) else str(key)
+            kind = str(key.get("kind") or "") if isinstance(key, dict) else ""
             # Defensive None-guard — DriftReport's dataclass schema today
             # guarantees these fields are floats, but partial-failure
             # writes or a future schema migration could land docs with
@@ -1410,15 +1425,41 @@ class MongoDBStore:
             p95s = [float(v) for v in (row.get("section_p95_values") or []) if v is not None]
             p50_median = statistics.median(p50s) if p50s else 0.0
             p95_median = statistics.median(p95s) if p95s else 0.0
-            out.append(
+            page_count = int(row.get("page_count", 0) or 0)
+            last_run_ts = row.get("last_run_ts")
+
+            entry = per_channel.setdefault(
+                channel_id,
                 {
-                    "channel_id": str(row.get("_id") or ""),
-                    "page_count": int(row.get("page_count", 0) or 0),
-                    "levenshtein_section_p50_median": p50_median,
-                    "levenshtein_section_p95_median": p95_median,
-                    "last_run_ts": row.get("last_run_ts"),
-                }
+                    "channel_id": channel_id,
+                    "page_count": 0,
+                    "all_p50_values": [],
+                    "all_p95_values": [],
+                    "per_kind": {},
+                    "last_run_ts": None,
+                },
             )
+            entry["page_count"] += page_count
+            entry["all_p50_values"].extend(p50s)
+            entry["all_p95_values"].extend(p95s)
+            entry["per_kind"][kind] = {
+                "kind": kind,
+                "page_count": page_count,
+                "levenshtein_section_p50_median": p50_median,
+                "levenshtein_section_p95_median": p95_median,
+                "last_run_ts": last_run_ts,
+            }
+            current_last = entry["last_run_ts"]
+            if last_run_ts is not None and (current_last is None or last_run_ts > current_last):
+                entry["last_run_ts"] = last_run_ts
+
+        out: list[dict[str, Any]] = []
+        for entry in per_channel.values():
+            p50s = entry.pop("all_p50_values")
+            p95s = entry.pop("all_p95_values")
+            entry["levenshtein_section_p50_median"] = statistics.median(p50s) if p50s else 0.0
+            entry["levenshtein_section_p95_median"] = statistics.median(p95s) if p95s else 0.0
+            out.append(entry)
         return out
 
     async def sweep_stale_extracting(self, stale_seconds: int = 600) -> int:

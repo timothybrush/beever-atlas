@@ -166,3 +166,68 @@ bf32cdd feat(extraction): ExtractionWorker class + atomic claim primitives
 - **Spec / scenarios:** `openspec/changes/oss-pipeline-and-wiki-redesign/` (gitignored, local-only)
 - **Project memory** (auto-loaded by Claude in future sessions): `~/.claude/projects/-Users-alanyang-Desktop-beever-ai-beever-atlas/memory/project_redesign_in_flight_state.md`
 - **Background scrub agent transcript** (do NOT read with `cat` — too large; use `wc -l` to check progress): `/private/tmp/claude-501/.../tasks/ac7dec086e21325a0.output`
+
+---
+
+## 🧱 wiki-llm-native-redesign — editorial layer (P0–P3 ship)
+
+The `redesign/oss-pipeline-and-wiki` branch additionally carries the
+`wiki-llm-native-redesign` change. The change closes the gap between
+"plumbing of an LLM Wiki" (already shipped on this branch) and "the
+editorial layer that makes one valuable" — per-page-kind synthesis
+prompts, `[[wikilink]]` cross-links, curation (pin / hide / split /
+merge), a wiki-graph view, and an MCP read surface.
+
+**Spec:** `openspec/changes/wiki-llm-native-redesign/` (proposal,
+design, specs, tasks; gitignored).
+
+**Flag:** `WIKI_LLM_NATIVE_REDESIGN` (default OFF for legacy installs;
+flipped ON in fresh-install `.env.example` only after the per-kind
+drift soak in `docs/runbooks/wiki-maintenance-soak.md` §22.8 closes).
+
+**Existing-install upgrade path:**
+
+1. Pull the branch — no behaviour change yet (flag is default OFF).
+2. Run `uv run python -m scripts.migrate_wiki_pages_to_slug_identity --dry-run`
+   to inspect the slug + kind backfill on existing pages.
+3. Run the same script without `--dry-run` once the dry-run output
+   looks correct. Idempotent — safe to re-run.
+4. Set `WIKI_LLM_NATIVE_REDESIGN=true` in `.env`, restart `beever-atlas`.
+5. Optionally enable the per-kind drift A/B during a soak window:
+   `WIKI_DRIFT_AB=true` + `WIKI_DRIFT_AB_PER_KIND_SAMPLE_RATE=0.05`.
+6. Watch `/admin/wiki-drift` (per-kind facets visible after first sync).
+7. After 7 clean days per the §22.8 pass criterion, open the PR that
+   flips the `.env.example` default.
+
+**What ships behind the flag:**
+
+- Per-page-kind synthesis prompts in `src/beever_atlas/wiki/prompts/`
+  (`topic.txt`, `entity.txt`, `decisions.txt`, `faq.txt`,
+  `action_items.txt`).
+- JSON-Schema validation of each kind's structured payload
+  (`src/beever_atlas/wiki/schemas/`).
+- `[[wikilink]]` parser + resolver writing `cross_links` (dict) +
+  `cross_links_broken` (list) to `wiki_pages`, plus REFERENCES edges
+  in Neo4j.
+- Curation API: `POST /api/channels/{id}/wiki/pages/{slug}/{pin|hide|split|merge}`.
+- Wiki graph route at `/channels/{id}/wiki/graph` (Cytoscape.js,
+  lazy-loaded — chunk is split from the wiki tab's main bundle).
+- MCP read tools: `read_wiki_page`, `list_wiki_pages`, `get_wiki_graph`.
+
+**What does NOT ship in v1 (documented seams):**
+
+- Agent-write `propose_wiki_edit` MCP tool — the `wiki_proposed_edits`
+  Mongo collection is reserved (TTL=30d, indexed by
+  `(channel_id, slug, status)`); v2 will register the tool.
+- Multi-tenant ACL on individual wiki pages.
+- Cross-channel wiki federation.
+- Real-time collaborative editing.
+
+**v1 → v2 forward-compat invariants:**
+
+- The `cross_links: dict[str, str]` field is title→slug. Future schema
+  changes that flatten this back to a list will need a migration.
+- `kind` is an open string, not an enum. Adding new kinds requires a
+  new prompt + schema file pair AND a `_KNOWN_KINDS` update.
+- `MongoDBStore.startup` adds `wiki_merge_proposals` and
+  `wiki_proposed_edits`. Existing installs auto-create on next boot.

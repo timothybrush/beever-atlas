@@ -56,6 +56,13 @@ class DriftReport:
     incremental_section_count: int
     regenerate_section_count: int
     sample_section_diffs: list[dict[str, Any]] = field(default_factory=list)
+    # ``wiki-llm-native-redesign`` §8.2 — kind facet on every drift report
+    # so the soak dashboard can break the median/p95 down per
+    # topic / entity / decisions / faq / action_items. Empty string for
+    # legacy pages whose kind hasn't been backfilled yet — the
+    # aggregation treats "" as a real bucket so it doesn't disappear
+    # silently mid-rollout.
+    kind: str = ""
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -148,6 +155,9 @@ def compute_drift_report(
     section_p50 = _percentile(section_distances, 0.5)
     section_p95 = _percentile(section_distances, 0.95)
 
+    # Prefer the incremental's kind (the apply_update path the maintainer
+    # is converging on); fall back to the regenerate's kind, then "".
+    page_kind = getattr(incremental, "kind", None) or getattr(regenerate, "kind", None) or ""
     return DriftReport(
         channel_id=channel_id,
         page_id=page_id,
@@ -161,6 +171,7 @@ def compute_drift_report(
         incremental_section_count=len(inc_sections),
         regenerate_section_count=len(regen_sections),
         sample_section_diffs=sample_diffs,
+        kind=str(page_kind),
     )
 
 

@@ -522,6 +522,17 @@ class Settings(BaseSettings):
     # only after the soak runbook closes (see §9.3 of the change tasks).
     wiki_llm_native_redesign: bool = Field(default=False, alias="WIKI_LLM_NATIVE_REDESIGN")
 
+    # Per-kind drift-A/B sample rate (§8.1). The legacy ``WIKI_DRIFT_AB``
+    # rate-limiter applies only to the legacy single-prompt comparison;
+    # this knob governs the redesign-vs-legacy A/B that runs alongside.
+    # 0.05 = 5% of apply_update calls trigger the per-kind comparison —
+    # statistically sufficient given typical page-touch frequency, and
+    # avoids doubling LLM cost on every rewrite. 0.0 disables the
+    # per-kind sampler entirely.
+    wiki_drift_ab_per_kind_sample_rate: float = Field(
+        default=0.05, alias="WIKI_DRIFT_AB_PER_KIND_SAMPLE_RATE"
+    )
+
     # Fact-overlap threshold for the page-merge proposal pass. The
     # maintainer compares ``last_facts_seen`` between every pair of
     # pages on each ``on_extraction_done`` and surfaces a merge proposal

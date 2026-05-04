@@ -215,3 +215,77 @@ After the initial soak, schedule a re-run quarterly so prompt-shift
 on the underlying LLM doesn't silently drift back over the threshold.
 The drift comparator stays in the code; flip `WIKI_DRIFT_AB=true` for
 the soak window each quarter and watch `/admin/wiki-drift` again.
+
+## §22.8 Per-kind drift soak — wiki-llm-native-redesign
+
+The LLM-native redesign (change ID `wiki-llm-native-redesign`) gates
+flipping its `WIKI_LLM_NATIVE_REDESIGN` flag from default-OFF to
+default-ON in `.env.example` on a 7-day per-kind drift soak. The
+mechanics mirror §22.4–§22.7 but the dashboard now exposes per-kind
+medians + p95s so the operator can spot a degraded prompt for one
+specific kind (e.g. the `decisions` page kind regressing while
+`topic` stays clean).
+
+### Setup
+
+1. Pick a real Mattermost (or other adapter) channel with at least
+   25 wiki pages spanning multiple kinds. The dogfood channel from
+   the change's redesign branch is the canonical reference.
+2. Set in `.env`:
+   ```
+   WIKI_LLM_NATIVE_REDESIGN=true
+   WIKI_DRIFT_AB=true
+   WIKI_DRIFT_AB_PER_KIND_SAMPLE_RATE=0.05
+   ```
+3. Restart `beever-atlas` so the new settings load.
+
+### Per-kind facets on `/admin/wiki-drift`
+
+The summary endpoint (`GET /api/admin/wiki-drift/summary`) now returns
+one row per channel with both the channel-level totals AND a `per_kind`
+map keyed by kind. Each per-kind entry carries
+`levenshtein_section_p50_median`, `levenshtein_section_p95_median`,
+`page_count`, and `last_run_ts`. A worked excerpt:
+
+```json
+{
+  "channel_id": "C-ENG",
+  "page_count": 28,
+  "levenshtein_section_p50_median": 0.08,
+  "levenshtein_section_p95_median": 0.21,
+  "per_kind": {
+    "topic":         { "page_count": 18, "p50": 0.07, "p95": 0.18 },
+    "entity":        { "page_count": 5,  "p50": 0.09, "p95": 0.22 },
+    "decisions":     { "page_count": 3,  "p50": 0.12, "p95": 0.31 },
+    "faq":           { "page_count": 1,  "p50": 0.05, "p95": 0.14 },
+    "action_items":  { "page_count": 1,  "p50": 0.04, "p95": 0.11 }
+  }
+}
+```
+
+### Pass criterion
+
+The redesign soak passes when, **across all five page kinds**:
+
+- median Levenshtein < 0.15 — operator-visible drift is bounded;
+- p95 < 0.30 — no kind has a long tail of high-divergence pages.
+
+If any single kind misses, dig in before flipping the default. The
+common offender is `decisions` (rare facts, high stakes) — sometimes
+its prompt needs tightening before the rollout.
+
+### Decision criteria for flipping the default
+
+Open the PR per §9.3 only when:
+
+1. The `/admin/wiki-drift` dashboard has had `pass_criterion_met=true`
+   per-kind for ≥7 consecutive days;
+2. No `wiki_kind_schema_validation_failed` warnings in the last 24
+   hours of structured logs (each warning is a 2-strike validation
+   miss — they should be vanishingly rare on a healthy prompt set);
+3. Migration script `scripts/migrate_wiki_pages_to_slug_identity.py`
+   has been run with `--dry-run` on the production cluster and the
+   change set is reviewed.
+
+If all three hold, the PR flipping `WIKI_LLM_NATIVE_REDESIGN=true` in
+`.env.example` is safe.
