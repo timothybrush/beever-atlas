@@ -510,6 +510,28 @@ class Settings(BaseSettings):
         default=60, alias="WIKI_DRIFT_AB_RATE_LIMIT_SECONDS"
     )
 
+    # LLM-native wiki redesign (change ``wiki-llm-native-redesign``).
+    # When True, the WikiMaintainer dispatches per-page-kind synthesis
+    # prompts (topic / entity / decisions / faq / action_items) instead
+    # of the legacy single ``_render_apply_update_prompt`` template,
+    # parses ``[[wikilink]]`` cross-references, and emits per-kind
+    # ``kind_schema`` payloads for the MCP read tools. When False, the
+    # maintainer falls through to the legacy single-prompt path —
+    # behaviour is byte-identical to pre-redesign so existing installs
+    # are unaffected. Default OFF; flips ON in fresh-install ``.env.example``
+    # only after the soak runbook closes (see §9.3 of the change tasks).
+    wiki_llm_native_redesign: bool = Field(default=False, alias="WIKI_LLM_NATIVE_REDESIGN")
+
+    # Fact-overlap threshold for the page-merge proposal pass. The
+    # maintainer compares ``last_facts_seen`` between every pair of
+    # pages on each ``on_extraction_done`` and surfaces a merge proposal
+    # when Jaccard similarity exceeds this threshold. Operator approves
+    # via the curation UI (no auto-merge — proposals only). 0.70 starts
+    # conservative; tune up if false-positive rate exceeds 1/week.
+    wiki_page_merge_threshold: float = Field(
+        default=0.70, alias="WIKI_PAGE_MERGE_THRESHOLD"
+    )
+
     # Single-tenant compatibility mode for the v1.0 OSS launch. When True,
     # any authenticated user principal is granted access to channels whose
     # owning PlatformConnection has ``owner_principal_id`` set to the shared

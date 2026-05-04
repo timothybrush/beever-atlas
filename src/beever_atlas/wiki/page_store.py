@@ -67,6 +67,35 @@ class WikiPageStore:
             [("channel_id", 1), ("target_lang", 1), ("updated_at", -1)],
             name="wiki_pages_channel_updated",
         )
+        # ``wiki-llm-native-redesign`` indexes (Phase 1 §2.5).
+        # Slug uniqueness is enforced per (channel_id, target_lang). Empty
+        # slugs are excluded from the unique constraint via a partial
+        # filter expression so legacy rows (which all share ``slug=""``
+        # before the migration script runs) do NOT collide. Once the
+        # migration backfills slugs the partial filter is still safe —
+        # the maintainer never produces an empty slug for new pages.
+        await self._collection.create_index(
+            [("channel_id", 1), ("target_lang", 1), ("slug", 1)],
+            unique=True,
+            name="wiki_pages_channel_lang_slug_unique",
+            partialFilterExpression={"slug": {"$gt": ""}},
+        )
+        # Sparse index on ``merged_into`` so the merge-redirect lookup
+        # (``find one where merged_into == <target>``) is cheap. Sparse
+        # because only merged pages carry the field; the vast majority
+        # of pages are excluded from the index.
+        await self._collection.create_index(
+            [("merged_into", 1)],
+            sparse=True,
+            name="wiki_pages_merged_into_sparse",
+        )
+        # ``list_pages_by_kind`` uses (channel_id, kind, updated_at DESC)
+        # — supports MCP ``list_wiki_pages(kind=...)`` plus the per-kind
+        # facets on the drift dashboard.
+        await self._collection.create_index(
+            [("channel_id", 1), ("kind", 1), ("updated_at", -1)],
+            name="wiki_pages_channel_kind_updated",
+        )
 
     # ------------------------------------------------------------------
     # Public API

@@ -62,9 +62,12 @@ class _FakeCursor:
 class _FakeWikiPagesCollection:
     def __init__(self) -> None:
         self.docs: dict[tuple[str, str, str], dict[str, Any]] = {}
+        # Captures every ``create_index`` call so introspection tests can
+        # assert the redesign indexes were requested with the right keys.
+        self.index_calls: list[dict[str, Any]] = []
 
-    async def create_index(self, *args, **kwargs) -> None:
-        pass
+    async def create_index(self, keys, **kwargs) -> None:
+        self.index_calls.append({"keys": keys, **kwargs})
 
     @staticmethod
     def _key(query: dict[str, Any]) -> tuple[str, str, str]:
@@ -414,3 +417,128 @@ async def test_delete_missing_page_returns_false() -> None:
     store, _ = _make_store()
     deleted = await store.delete_page("C1", "missing")
     assert deleted is False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# wiki-llm-native-redesign — Phase 1 §2.6 / §2.7
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def test_save_page_round_trips_redesign_fields() -> None:
+    """§2.6 — every new redesign field survives save_page → get_page."""
+    store, _ = _make_store()
+    page = WikiPage(
+        channel_id="C1",
+        target_lang="en",
+        page_id="topic:auth",
+        title="Authentication Architecture",
+        slug="authentication-architecture",
+        kind="entity",
+        kind_schema={
+            "name": "Alice",
+            "owns": ["auth-service"],
+            "decides": ["session-policy"],
+            "contributes": ["RFC-42"],
+        },
+        cross_links=["session-policy", "rfc-42"],
+        cross_links_broken=["unknown-page"],
+        pin_state={
+            "pinned": True,
+            "hidden": False,
+            "reason": "load-bearing — do not restructure",
+            "set_by": "alan@beever.ai",
+            "set_at": None,
+        },
+        merged_into=None,
+    )
+    await store.save_page(page)
+
+    fetched = await store.get_page("C1", "topic:auth")
+    assert fetched is not None
+    assert fetched.kind == "entity"
+    assert fetched.kind_schema == {
+        "name": "Alice",
+        "owns": ["auth-service"],
+        "decides": ["session-policy"],
+        "contributes": ["RFC-42"],
+    }
+    assert fetched.cross_links == ["session-policy", "rfc-42"]
+    assert fetched.cross_links_broken == ["unknown-page"]
+    assert fetched.pin_state["pinned"] is True
+    assert fetched.pin_state["reason"] == "load-bearing — do not restructure"
+    assert fetched.pin_state["set_by"] == "alan@beever.ai"
+    assert fetched.merged_into is None
+    # And the original slug-as-identity field round-trips too.
+    assert fetched.slug == "authentication-architecture"
+
+
+async def test_save_page_defaults_redesign_fields_for_legacy_callers() -> None:
+    """A WikiPage instantiated without the redesign kwargs persists with
+    defaults that match the legacy maintainer's expectations — kind defaults
+    to ``topic``, ``cross_links`` empty, ``pin_state`` neutral, ``merged_into``
+    None. Guards against accidental ``None`` defaults that would crash the
+    legacy maintainer when WIKI_LLM_NATIVE_REDESIGN is OFF.
+    """
+    store, _ = _make_store()
+    page = WikiPage(
+        channel_id="C1",
+        target_lang="en",
+        page_id="overview",
+        title="Overview",
+    )
+    await store.save_page(page)
+
+    fetched = await store.get_page("C1", "overview")
+    assert fetched is not None
+    assert fetched.kind == "topic"
+    assert fetched.kind_schema is None
+    assert fetched.cross_links == []
+    assert fetched.cross_links_broken == []
+    assert fetched.pin_state == {
+        "pinned": False,
+        "hidden": False,
+        "reason": "",
+        "set_by": "",
+        "set_at": None,
+    }
+    assert fetched.merged_into is None
+
+
+async def test_ensure_indexes_creates_redesign_indexes() -> None:
+    """§2.7 — ensure_indexes requests the three redesign indexes with the
+    correct keys, uniqueness, sparseness, and partial filters. Captures the
+    create_index calls structurally so a regression that drops the partial
+    filter (which would crash the unique constraint on legacy ``slug=""``
+    rows) fails the test.
+    """
+    store, fake = _make_store()
+    # Indexes call into the fake collection directly via store._collection.
+    await store.ensure_indexes()
+
+    by_name = {call.get("name"): call for call in fake.index_calls}
+    # Pre-existing indexes still requested.
+    assert "wiki_pages_compound_unique" in by_name
+    assert "wiki_pages_channel_updated" in by_name
+    # Redesign — slug uniqueness with partial filter on non-empty slug.
+    slug_idx = by_name.get("wiki_pages_channel_lang_slug_unique")
+    assert slug_idx is not None, "missing slug uniqueness index"
+    assert slug_idx["keys"] == [
+        ("channel_id", 1),
+        ("target_lang", 1),
+        ("slug", 1),
+    ]
+    assert slug_idx.get("unique") is True
+    assert slug_idx.get("partialFilterExpression") == {"slug": {"$gt": ""}}
+    # Redesign — sparse index on merged_into.
+    merged_idx = by_name.get("wiki_pages_merged_into_sparse")
+    assert merged_idx is not None, "missing merged_into sparse index"
+    assert merged_idx["keys"] == [("merged_into", 1)]
+    assert merged_idx.get("sparse") is True
+    # Redesign — (channel_id, kind, updated_at DESC) for list-by-kind.
+    kind_idx = by_name.get("wiki_pages_channel_kind_updated")
+    assert kind_idx is not None, "missing channel/kind/updated_at index"
+    assert kind_idx["keys"] == [
+        ("channel_id", 1),
+        ("kind", 1),
+        ("updated_at", -1),
+    ]

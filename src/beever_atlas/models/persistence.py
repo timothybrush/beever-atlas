@@ -276,8 +276,19 @@ class WikiPage(BaseModel):
 
     title: str = ""
     slug: str = ""
-    """URL slug — preserved across maintainer rewrites so external
-    links from the agent / chat platforms don't break."""
+    """Stable, human-readable identity for the page within
+    ``(channel_id, target_lang)``. Derived at first-touch from the
+    page's title (kebab-case + dedupe-suffix); immutable thereafter
+    unless the operator explicitly merges or splits. The
+    ``wiki-llm-native-redesign`` change promotes this from a
+    presentation-only URL helper to a primary identity field — see
+    the redesign's ``wiki-page-identity`` capability spec.
+
+    Legacy rows that predate the redesign retain ``slug=""``; the
+    Phase-3 migration script backfills them from ``title``. The
+    ``wiki_pages_channel_lang_slug_unique`` index uses a partial
+    filter so empty slugs do NOT collide during the migration window.
+    """
 
     sections: list[WikiPageSection] = Field(default_factory=list)
     version: int = 1
@@ -299,6 +310,66 @@ class WikiPage(BaseModel):
     """Optional reference excerpt the WikiMaintainer uses to keep the
     rewrite tone consistent. Populated on first generation from the
     original page content; subsequent rewrites preserve it."""
+
+    # ---- wiki-llm-native-redesign fields ----------------------------------
+    # The redesign promotes per-page-kind synthesis: each page declares a
+    # ``kind`` (topic / entity / decisions / faq / action_items) which
+    # selects a distinct synthesis prompt + JSON schema. Cross-links and
+    # curation flags also live on the page document so the maintainer can
+    # read them without an extra collection lookup. All defaults match
+    # the pre-redesign behavior so legacy rows keep working under the
+    # ``WIKI_LLM_NATIVE_REDESIGN=False`` flag (the maintainer falls
+    # through to the legacy single-prompt path).
+    kind: str = "topic"
+    """Page kind — drives prompt + schema selection in
+    ``WikiMaintainer.apply_update`` when ``WIKI_LLM_NATIVE_REDESIGN`` is
+    ON. Allowed values: ``topic`` (default), ``entity``, ``decisions``,
+    ``faq``, ``action_items``. Unknown kinds fall through to the legacy
+    prompt — additive evolution rather than a closed enum keeps
+    forward-compat with future kinds."""
+
+    kind_schema: dict[str, Any] | None = None
+    """Structured payload validated against the page's
+    ``wiki/schemas/{kind}.json`` schema. Consumed by the MCP
+    ``read_wiki_page`` tool so agents can iterate the page
+    structurally without re-parsing markdown. ``None`` means the
+    maintainer's response failed schema validation twice — the page's
+    ``content_md`` is still trustworthy; only the structured surface
+    is missing."""
+
+    cross_links: list[str] = Field(default_factory=list)
+    """Slugs of other wiki pages this page references via
+    ``[[wikilink]]`` syntax. Resolved at maintainer time so the
+    renderer doesn't run N fuzzy matches per page render."""
+
+    cross_links_broken: list[str] = Field(default_factory=list)
+    """Titles inside ``[[...]]`` that did NOT resolve to an existing
+    page. Surfaced in the UI as broken-link indicators with a
+    ``Create page?`` affordance. Kept distinct from ``cross_links``
+    so resolved + broken state can both be rendered without
+    re-running the resolver client-side."""
+
+    pin_state: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "pinned": False,
+            "hidden": False,
+            "reason": "",
+            "set_by": "",
+            "set_at": None,
+        }
+    )
+    """Operator curation flags. Maintainer's ``apply_update`` adds a
+    ``do not restructure`` addendum when ``pinned=True``; the
+    ``list_pages`` (human scope) excludes pages where ``hidden=True``.
+    Curation writes go through ``WikiPageStore.update_pin_state``
+    which deliberately does NOT bump ``version`` — flag toggles
+    aren't content edits."""
+
+    merged_into: str | None = None
+    """When non-null, this page has been merged into the named target
+    slug. The wiki HTTP layer issues a 301 to the target on direct
+    GETs, the maintainer routes future facts to the target, and the
+    page is hidden from human nav. ``None`` is the normal case."""
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
