@@ -171,7 +171,7 @@ export function WikiHealthToolbar({
   const showFailuresItem = failureCount === undefined ? true : failureCount > 0;
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2 justify-end">
       {/* Primary CTA: Maintain Wiki — only in manual mode */}
       {manualMode && (
         <Tooltip>
@@ -179,7 +179,7 @@ export function WikiHealthToolbar({
             aria-label="Maintain Wiki — re-run the maintainer on pages flagged dirty since the last run"
             onClick={() => maintain.maintain()}
             disabled={maintain.loading || !channelId}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted disabled:opacity-50 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
           >
             {maintain.loading ? (
               <Loader2 size={12} className="animate-spin" />
@@ -212,7 +212,7 @@ export function WikiHealthToolbar({
             setToolsOpen((v) => !v);
             setConfirmRegenerate(false);
           }}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted transition-colors"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-md border border-border/60 bg-background hover:bg-muted transition-colors whitespace-nowrap"
         >
           <Wrench size={12} />
           Tools
@@ -291,17 +291,20 @@ export function WikiHealthToolbar({
               <span className="flex-1">Download</span>
             </button>
 
-            {/* Graph view (§6.10) — opens the cross-link graph route */}
+            {/* Graph view (§6.10) — deep-links into the channel's Graph
+                tab pre-toggled to the wiki view, so the operator lands
+                in the same surface as if they had clicked the Graph
+                tab directly + flipped the view toggle. */}
             <button
               role="menuitem"
               type="button"
               onClick={() => {
                 setToolsOpen(false);
-                navigate(`/channels/${channelId}/wiki/graph`);
+                navigate(`/channels/${channelId}/graph?view=wiki`);
               }}
               disabled={!channelId}
               className={TOOL_BTN + " disabled:opacity-40 disabled:cursor-not-allowed"}
-              aria-label="Open the wiki graph view"
+              aria-label="Open the wiki cross-link graph view"
             >
               <Network size={12} className="shrink-0" />
               <span className="flex-1">Graph</span>
