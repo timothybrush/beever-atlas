@@ -668,6 +668,23 @@ export function WikiTab() {
     }
   }, [channelId]);
 
+  // Compute topicPages BEFORE the early returns below — React's rules of
+  // hooks require ``useMemo`` to fire on every render, and the early
+  // returns at the loading/empty/404 branches would otherwise skip it.
+  // Use ``?.`` to tolerate the null wiki / null versionData states; the
+  // empty-array fallback is what the early-return UIs would have used
+  // anyway. Pairs with the ``useExtractionStatus`` last-key guard.
+  const _structureForTopicPages =
+    viewingVersionNumber !== null && versionData !== null
+      ? versionData.structure
+      : wiki?.structure;
+  const topicPages = useMemo(
+    () =>
+      _structureForTopicPages?.pages.filter((p) => p.page_type === "topic") ??
+      [],
+    [_structureForTopicPages],
+  );
+
   if (isLoading) {
     return <WikiLoadingSkeleton />;
   }
@@ -760,16 +777,9 @@ export function WikiTab() {
     activePage = activePageId === "overview" ? wiki.overview : (pageData ?? null);
   }
 
-  // Memoize to keep array reference stable across parent re-renders.
-  // Without this, sibling-hook polls (extraction-status, version count,
-  // etc.) trigger a fresh ``filter()`` call → fresh array → OverviewPage
-  // gets new ``topicPages`` prop ref → wrapping ``transition-opacity``
-  // div remounts → visible flash. Paired with the ``useExtractionStatus``
-  // last-key guard in step 1.
-  const topicPages = useMemo(
-    () => activeStructure.pages.filter((p) => p.page_type === "topic"),
-    [activeStructure],
-  );
+  // ``topicPages`` is hoisted above the early returns above (rules of
+  // hooks). It uses a safe optional-chain on the structure, so the
+  // computation is identical here once we reach this point.
 
   const showPageLoading = isViewingVersion ? isVersionLoading : isPageLoading;
 
