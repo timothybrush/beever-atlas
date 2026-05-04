@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, type ReactNode } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { wikiT } from "@/lib/wikiI18n";
 import { RefreshCw, BookOpen, AlertTriangle, Sparkles, Network, FileText, Loader2, CheckCircle2, Circle, ArrowRight, FolderSync, History as HistoryIcon } from "lucide-react";
 import { PipelineEmptyState } from "@/components/shared/PipelineEmptyState";
@@ -412,7 +412,28 @@ function renderPage(
 export function WikiTab() {
   const { id: channelId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [activePageId, setActivePageId] = useState<string>("overview");
+  // ``?page={pageId}`` deep-link — seeded on mount, supports the
+  // "Open in Wiki tab" button on the wiki graph view's preview panel.
+  // The state-setter below clears the param when the user navigates
+  // internally so the URL stays in sync with what they see.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialPageParam = searchParams.get("page");
+  const [activePageId, setActivePageId] = useState<string>(
+    initialPageParam || "overview",
+  );
+  // Strip ``?page=...`` from the URL on first paint so a subsequent
+  // refresh doesn't re-jump the user back to the deep-link target
+  // after they have navigated within the wiki tab.
+  useEffect(() => {
+    if (initialPageParam) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("page");
+      setSearchParams(next, { replace: true });
+    }
+    // Run once on mount; subsequent ``?page`` changes are intentional
+    // navigations (e.g. another tab links to a specific page).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [viewingVersionNumber, setViewingVersionNumber] = useState<number | null>(null);
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
 

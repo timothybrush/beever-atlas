@@ -751,6 +751,7 @@ async def get_wiki_graph(
     # ``id``/``slug``/``title``/``page_type``/``parent_id``/``section_number``;
     # the parent_id chain becomes the edge set, mirroring the wiki
     # tab's hierarchy view.
+    channel_label = ""
     if not nodes:
         try:
             cache = _get_cache()
@@ -765,24 +766,54 @@ async def get_wiki_graph(
         legacy_pages = (
             (legacy_doc or {}).get("pages") if isinstance(legacy_doc, dict) else None
         )
+        if isinstance(legacy_doc, dict):
+            structure = legacy_doc.get("structure") or {}
+            if isinstance(structure, dict):
+                channel_label = (
+                    structure.get("channel_name")
+                    or legacy_doc.get("channel_name")
+                    or ""
+                )
         if isinstance(legacy_pages, dict):
             for page_id, page in legacy_pages.items():
                 if not isinstance(page, dict):
                     continue
-                slug = page.get("slug") or str(page_id) or ""
-                if not slug or slug in seen_node_ids:
+                # Use the page_id (not slug) as the graph node id so
+                # the frontend can route to the wiki tab + select the
+                # right page via ``?page={page_id}`` deep link.
+                node_id = str(page_id)
+                slug = page.get("slug") or node_id
+                if not node_id or node_id in seen_node_ids:
                     continue
-                seen_node_ids.add(slug)
+                seen_node_ids.add(node_id)
+                # Short summary: the first 240 chars of content_md /
+                # content / summary so the side panel can show
+                # something useful without a second round-trip.
+                raw = (
+                    page.get("summary")
+                    or page.get("content")
+                    or ""
+                )
+                if isinstance(raw, str):
+                    excerpt = raw.strip()[:240].rstrip()
+                    if len(raw) > 240:
+                        excerpt += "…"
+                else:
+                    excerpt = ""
                 nodes.append(
                     {
                         "data": {
-                            "id": slug,
+                            "id": node_id,
+                            "slug": slug,
+                            "page_id": node_id,
                             "label": page.get("title") or slug,
                             "kind": "wiki",
                             "page_kind": page.get("page_type") or "topic",
                             "version": 0,
                             "last_updated": "",
                             "section_number": page.get("section_number") or "",
+                            "summary": excerpt,
+                            "memory_count": page.get("memory_count") or 0,
                             "legacy": True,
                         }
                     }
@@ -794,29 +825,25 @@ async def get_wiki_graph(
             for page_id, page in legacy_pages.items():
                 if not isinstance(page, dict):
                     continue
-                src_slug = page.get("slug") or str(page_id)
+                src_id = str(page_id)
                 parent_id = page.get("parent_id")
                 if not parent_id or not isinstance(parent_id, str):
                     continue
-                parent_page = legacy_pages.get(parent_id)
-                if not isinstance(parent_page, dict):
+                if parent_id not in seen_node_ids or src_id not in seen_node_ids:
                     continue
-                dst_slug = parent_page.get("slug") or parent_id
-                if not src_slug or not dst_slug or src_slug == dst_slug:
+                if src_id == parent_id:
                     continue
-                if dst_slug not in seen_node_ids or src_slug not in seen_node_ids:
-                    continue
-                key = (src_slug, dst_slug, "references_wiki")
+                key = (src_id, parent_id, "child_of")
                 if key in seen_edges:
                     continue
                 seen_edges.add(key)
                 edges.append(
                     {
                         "data": {
-                            "id": f"e:{src_slug}->{dst_slug}",
-                            "source": src_slug,
-                            "target": dst_slug,
-                            "kind": "references_wiki",
+                            "id": f"e:{src_id}->{parent_id}",
+                            "source": src_id,
+                            "target": parent_id,
+                            "kind": "child_of",
                             "legacy": True,
                         }
                     }
@@ -867,6 +894,67 @@ async def get_wiki_graph(
                 "event=wiki_graph_entity_enrichment_failed channel_id=%s err=%s",
                 channel_id,
                 exc,
+            )
+
+    # 4) Central channel hub — gives the cose-bilkent / concentric
+    # layouts a meaningful pivot. Every wiki node that has no in-edges
+    # (no parent / no incoming reference) gets a ``belongs_to`` edge
+    # to the hub so disconnected pages still anchor to the channel.
+    if nodes:
+        hub_id = f"channel:{channel_id}"
+        if hub_id not in seen_node_ids:
+            seen_node_ids.add(hub_id)
+            nodes.append(
+                {
+                    "data": {
+                        "id": hub_id,
+                        "label": channel_label or "Channel",
+                        "kind": "channel",
+                        "page_kind": "channel",
+                        "summary": (
+                            f"All wiki pages for this channel "
+                            f"({sum(1 for n in nodes if n['data'].get('kind') == 'wiki')} pages)."
+                        ),
+                    }
+                }
+            )
+        # Find every node with no incoming edge among the wiki/entity
+        # node set and connect it to the hub.
+        targets_with_incoming: set[str] = set()
+        for edge in edges:
+            tgt = edge.get("data", {}).get("target")
+            if isinstance(tgt, str):
+                targets_with_incoming.add(tgt)
+        for node in nodes:
+            nd = node.get("data", {})
+            if nd.get("kind") != "wiki":
+                continue
+            nid = nd.get("id")
+            if not isinstance(nid, str) or nid == hub_id:
+                continue
+            # Only top-level orphans — pages with NO parent edge — anchor
+            # to the hub. Pages already inside the hierarchy chain reach
+            # the hub transitively via their parent.
+            has_parent_edge = any(
+                e.get("data", {}).get("source") == nid
+                and e.get("data", {}).get("kind") == "child_of"
+                for e in edges
+            )
+            if has_parent_edge:
+                continue
+            key = (nid, hub_id, "belongs_to")
+            if key in seen_edges:
+                continue
+            seen_edges.add(key)
+            edges.append(
+                {
+                    "data": {
+                        "id": f"e:{nid}->{hub_id}",
+                        "source": nid,
+                        "target": hub_id,
+                        "kind": "belongs_to",
+                    }
+                }
             )
 
     return {"channel_id": channel_id, "nodes": nodes, "edges": edges}

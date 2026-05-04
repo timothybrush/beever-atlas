@@ -290,8 +290,10 @@ async def test_endpoint_swallows_neo4j_errors_keeping_wiki_pages() -> None:
     )
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
-    # Both wiki pages survived the Neo4j failure.
-    assert {n["data"]["id"] for n in result["nodes"]} == {"topic-auth", "topic-sessions"}
+    # Both wiki pages survived the Neo4j failure (the channel hub is
+    # added below the wiki nodes, expected on every non-empty graph).
+    wiki_ids = {n["data"]["id"] for n in result["nodes"] if n["data"]["kind"] == "wiki"}
+    assert wiki_ids == {"topic-auth", "topic-sessions"}
     # And the references_wiki edge from sessions -> auth landed.
     edges = [e for e in result["edges"] if e["data"]["kind"] == "references_wiki"]
     assert len(edges) == 1
@@ -333,7 +335,9 @@ async def test_endpoint_builds_wiki_nodes_and_edges_from_mongo() -> None:
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
 
-    assert len(result["nodes"]) == 3
+    # 3 wiki nodes + 1 channel hub on every non-empty graph.
+    wiki_nodes = [n for n in result["nodes"] if n["data"]["kind"] == "wiki"]
+    assert len(wiki_nodes) == 3
     edges = [e for e in result["edges"] if e["data"]["kind"] == "references_wiki"]
     assert len(edges) == 3
     pairs = {(e["data"]["source"], e["data"]["target"]) for e in edges}
@@ -366,8 +370,13 @@ async def test_endpoint_drops_dangling_cross_link_edges() -> None:
     )
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
-    assert len(result["nodes"]) == 1
-    assert result["edges"] == []
+    wiki_nodes = [n for n in result["nodes"] if n["data"]["kind"] == "wiki"]
+    assert len(wiki_nodes) == 1
+    # No references_wiki edge — the dangling cross_link target was
+    # dropped. The channel hub still gets a belongs_to edge from the
+    # orphan wiki node, but no references_wiki edge.
+    references_wiki = [e for e in result["edges"] if e["data"]["kind"] == "references_wiki"]
+    assert references_wiki == []
 
 
 async def test_endpoint_enriches_with_entity_edges_from_neo4j() -> None:
@@ -409,8 +418,11 @@ async def test_endpoint_enriches_with_entity_edges_from_neo4j() -> None:
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
 
-    # Entity node + entity edge both present.
-    assert {n["data"]["id"] for n in result["nodes"]} == {"topic-auth", "entity:Bob"}
+    # Entity node + entity edge both present alongside the wiki page
+    # and the channel hub.
+    visible_ids = {n["data"]["id"] for n in result["nodes"]}
+    assert "topic-auth" in visible_ids
+    assert "entity:Bob" in visible_ids
     entity_edges = [
         e for e in result["edges"] if e["data"]["kind"] == "references_entity"
     ]

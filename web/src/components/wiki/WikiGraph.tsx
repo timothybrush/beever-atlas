@@ -1,17 +1,25 @@
 /**
- * Wiki graph view — renders the channel's WikiPage + Entity nodes and
- * their REFERENCES edges via Cytoscape.js.
+ * Wiki graph view — renders the channel's wiki pages, their hierarchy
+ * (parent/child edges), `[[wikilink]]` cross-references, and a central
+ * Channel hub via Cytoscape.js.
  *
  * Cytoscape is loaded ONLY at mount time via dynamic ``import()`` so
  * the wiki tab's main bundle never pays its weight (§6.13). Until the
  * dynamic import resolves, a lightweight skeleton shows in place of
  * the canvas.
+ *
+ * Click a wiki node → opens an inline preview panel on the right with
+ * the page's title, summary, section number, and an "Open in Wiki tab"
+ * button that routes to the wiki tab WITH the right page selected via
+ * a ``?page={pageId}`` query param. No 404s, no out-of-context
+ * navigation.
  */
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useWikiGraph, type WikiGraphPayload } from "@/hooks/useWikiGraph";
+import { X, ExternalLink } from "lucide-react";
+import { useWikiGraph, type WikiGraphPayload, type WikiGraphNode } from "@/hooks/useWikiGraph";
 
-type LayoutKey = "cose-bilkent" | "dagre" | "grid";
+type LayoutKey = "concentric" | "cose" | "dagre" | "grid";
 type KindFilter = "all" | "topic" | "entity" | "decisions" | "faq" | "action_items";
 type WindowFilter = "all" | "1h" | "24h" | "7d";
 
@@ -39,16 +47,15 @@ function applyFilters(
       : now - WINDOW_MS[filters.touchedWithin];
 
   const nodes = payload.nodes.filter((n) => {
+    // Channel hub always survives; the graph would float without it.
+    if (n.data.kind === "channel") return true;
     if (filters.kind === "all") return true;
     if (filters.kind === "entity") return n.data.kind === "entity";
-    // Wiki-page kinds: topic / decisions / faq / etc.
     if (n.data.kind !== "wiki") return false;
     return n.data.page_kind === filters.kind;
   });
 
-  // Citation density filter — count incoming edges per node and keep
-  // those at or above the threshold (or always keep entities since
-  // they don't have a meaningful "citation count").
+  // Citation density filter — count incoming edges per node.
   const incoming = new Map<string, number>();
   for (const edge of payload.edges) {
     incoming.set(edge.data.target, (incoming.get(edge.data.target) ?? 0) + 1);
@@ -80,6 +87,106 @@ interface WikiGraphProps {
   channelId?: string;
 }
 
+interface WikiGraphSelectionData {
+  id: string;
+  pageId?: string;
+  slug?: string;
+  label: string;
+  kind?: string;
+  pageKind?: string;
+  sectionNumber?: string;
+  summary?: string;
+  memoryCount?: number;
+  lastUpdated?: string;
+  isChannel: boolean;
+  isEntity: boolean;
+}
+
+function selectionFromNode(node: WikiGraphNode): WikiGraphSelectionData {
+  const d = node.data ?? {};
+  const dAny = d as Record<string, unknown>;
+  return {
+    id: String(d.id ?? ""),
+    pageId:
+      typeof dAny.page_id === "string"
+        ? dAny.page_id
+        : typeof dAny.id === "string"
+          ? dAny.id
+          : undefined,
+    slug: typeof dAny.slug === "string" ? dAny.slug : undefined,
+    label: typeof d.label === "string" ? d.label : String(d.id ?? ""),
+    kind: typeof d.kind === "string" ? d.kind : undefined,
+    pageKind: typeof d.page_kind === "string" ? d.page_kind : undefined,
+    sectionNumber:
+      typeof dAny.section_number === "string"
+        ? (dAny.section_number as string)
+        : undefined,
+    summary: typeof dAny.summary === "string" ? (dAny.summary as string) : undefined,
+    memoryCount:
+      typeof dAny.memory_count === "number"
+        ? (dAny.memory_count as number)
+        : undefined,
+    lastUpdated:
+      typeof d.last_updated === "string" ? d.last_updated : undefined,
+    isChannel: d.kind === "channel",
+    isEntity: d.kind === "entity",
+  };
+}
+
+// Per-kind colors keep the graph legible when node count is large.
+const KIND_COLORS: Record<string, string> = {
+  channel: "#a855f7", // purple — central hub
+  wiki_overview: "#0ea5e9", // sky — overview pages (page_kind="fixed" + slug=overview)
+  wiki_fixed: "#22c55e", // green — fixed pages (people, faq, etc.)
+  wiki_topic: "#3b82f6", // blue — topic pages
+  wiki_subtopic: "#60a5fa", // light blue — sub-topics
+  wiki_entity_page: "#f59e0b", // amber — entity wiki pages
+  wiki_decisions: "#ef4444", // red — decisions
+  wiki_faq: "#8b5cf6", // violet — FAQ
+  wiki_action_items: "#14b8a6", // teal — action items
+  wiki_default: "#3b82f6",
+  entity: "#10b981", // emerald — graph entity nodes
+};
+
+function colorForNode(node: WikiGraphNode): string {
+  const d = node.data ?? {};
+  if (d.kind === "channel") return KIND_COLORS.channel;
+  if (d.kind === "entity") return KIND_COLORS.entity;
+  const slug = (d as Record<string, unknown>).slug as string | undefined;
+  const pk = d.page_kind || "topic";
+  if (slug === "overview") return KIND_COLORS.wiki_overview;
+  if (pk === "fixed") return KIND_COLORS.wiki_fixed;
+  if (pk === "sub-topic") return KIND_COLORS.wiki_subtopic;
+  if (pk === "entity") return KIND_COLORS.wiki_entity_page;
+  if (pk === "decisions") return KIND_COLORS.wiki_decisions;
+  if (pk === "faq") return KIND_COLORS.wiki_faq;
+  if (pk === "action_items") return KIND_COLORS.wiki_action_items;
+  if (pk === "topic") return KIND_COLORS.wiki_topic;
+  return KIND_COLORS.wiki_default;
+}
+
+// Pre-build elements with per-node color so the cytoscape style sheet
+// can reference data(color) directly — keeps the style block small.
+function buildElements(filtered: WikiGraphPayload): unknown[] {
+  const out: unknown[] = [];
+  for (const node of filtered.nodes) {
+    const isChannel = node.data.kind === "channel";
+    const isEntity = node.data.kind === "entity";
+    out.push({
+      data: {
+        ...node.data,
+        color: colorForNode(node),
+        nodeSize: isChannel ? 60 : isEntity ? 32 : 38,
+        labelSize: isChannel ? 14 : 11,
+      },
+    });
+  }
+  for (const edge of filtered.edges) {
+    out.push({ data: { ...edge.data } });
+  }
+  return out;
+}
+
 export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {}) {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -90,41 +197,68 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     touchedWithin: "all",
     minCitations: 0,
   });
-  const [layout, setLayout] = useState<LayoutKey>("cose-bilkent");
+  const [layout, setLayout] = useState<LayoutKey>("concentric");
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // ``unknown`` because cytoscape's type surface (Core, ElementDefinition)
+  // adds a non-trivial type-import; the runtime methods we touch
+  // (``on`` + ``destroy``) are narrowed at use site.
   const cyRef = useRef<unknown>(null);
   const [cytoscapeReady, setCytoscapeReady] = useState(false);
   const [cytoscapeError, setCytoscapeError] = useState<string | null>(null);
+  const [selection, setSelection] = useState<WikiGraphSelectionData | null>(null);
 
   const filtered = useMemo(
     () => (data ? applyFilters(data, filters) : null),
     [data, filters],
   );
 
-  // Click handler held in a ref so the cytoscape mount effect does NOT
-  // depend on the callback's identity — otherwise channelId / navigate
-  // identity changes would tear down + remount the entire graph (visible
-  // flicker). The ref keeps the latest closure available without
-  // making it part of the effect's dependency array.
-  const handleNodeClickRef = useRef<(nodeId: string) => void>(() => undefined);
-  handleNodeClickRef.current = useCallback(
-    (nodeId: string) => {
-      if (!channelId) return;
-      if (nodeId.startsWith("entity:")) {
-        // Entity nodes navigate to the existing entity-graph route.
-        navigate(`/channels/${channelId}/graph?entity=${encodeURIComponent(nodeId.slice(7))}`);
-        return;
+  // Selection handler held in a ref so the cytoscape mount effect does
+  // NOT depend on its identity — channelId / navigate identity changes
+  // would otherwise destroy + remount the entire graph (visible flicker).
+  const handleNodeTapRef = useRef<(nodeData: Record<string, unknown>) => void>(
+    () => undefined,
+  );
+  handleNodeTapRef.current = useCallback((nodeData: Record<string, unknown>) => {
+    if (!nodeData) return;
+    const fakeNode: WikiGraphNode = { data: nodeData as WikiGraphNode["data"] };
+    const sel = selectionFromNode(fakeNode);
+    if (sel.isEntity) {
+      // Entity nodes still navigate to the existing entity-graph route
+      // since they reach beyond the wiki domain.
+      if (channelId) {
+        const entityName = sel.id.startsWith("entity:")
+          ? sel.id.slice(7)
+          : sel.label;
+        navigate(`/channels/${channelId}/graph?entity=${encodeURIComponent(entityName)}`);
       }
-      navigate(`/channels/${channelId}/wiki/pages/${nodeId}`);
-    },
-    [channelId, navigate],
+      return;
+    }
+    if (sel.isChannel) {
+      // Channel hub click — show a brief panel describing the channel,
+      // no routing.
+      setSelection(sel);
+      return;
+    }
+    // Wiki node → open inline preview panel.
+    setSelection(sel);
+  }, [channelId, navigate]);
+
+  const elements = useMemo(
+    () => (filtered ? buildElements(filtered) : []),
+    [filtered],
   );
 
-  // Lazy-load cytoscape ONCE — the dynamic import keeps it out of the
-  // wiki tab's main bundle.
   useEffect(() => {
     let alive = true;
-    let cy: { destroy: () => void } | null = null;
+    type CyInstance = {
+      on: (
+        event: string,
+        selector: string,
+        handler: (e: { target: { data: () => Record<string, unknown> } }) => void,
+      ) => void;
+      destroy: () => void;
+    };
+    let cy: CyInstance | null = null;
     if (!filtered || !containerRef.current) return;
 
     (async () => {
@@ -132,57 +266,122 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
         const module = await import("cytoscape");
         if (!alive) return;
         const cytoscape = (module as { default: unknown }).default ?? module;
-        const factory = cytoscape as (config: Record<string, unknown>) => {
-          on: (event: string, selector: string, handler: (e: unknown) => void) => void;
-          destroy: () => void;
-        };
+        const factory = cytoscape as (config: Record<string, unknown>) => CyInstance;
         cy = factory({
           container: containerRef.current,
-          elements: [...filtered.nodes, ...filtered.edges],
+          elements,
+          wheelSensitivity: 0.2,
           style: [
             {
               selector: "node",
               style: {
                 label: "data(label)",
-                "font-size": 10,
-                "background-color": "#3b82f6",
-                width: 24,
-                height: 24,
                 "text-valign": "bottom",
-                "text-margin-y": 4,
-                color: "#374151",
+                "text-halign": "center",
+                "text-margin-y": 6,
+                color: "#cbd5e1",
+                "font-size": "data(labelSize)",
+                "font-weight": 500,
+                "text-wrap": "wrap",
+                "text-max-width": "120px",
+                "background-color": "data(color)",
+                width: "data(nodeSize)",
+                height: "data(nodeSize)",
+                "border-width": 1.5,
+                "border-color": "rgba(255,255,255,0.15)",
+                "transition-property":
+                  "background-color, border-color, width, height",
+                "transition-duration": 150,
               },
             },
             {
-              selector: "node[kind = 'entity']",
-              style: { "background-color": "#10b981" },
+              selector: "node[kind = 'channel']",
+              style: {
+                "border-width": 3,
+                "border-color": "rgba(168,85,247,0.5)",
+                "font-weight": 700,
+                color: "#f3e8ff",
+              },
+            },
+            {
+              selector: "node:selected",
+              style: {
+                "border-color": "#fbbf24",
+                "border-width": 3,
+              },
             },
             {
               selector: "edge",
               style: {
                 width: 1.5,
-                "line-color": "#94a3b8",
-                "target-arrow-color": "#94a3b8",
+                "line-color": "rgba(148,163,184,0.5)",
+                "target-arrow-color": "rgba(148,163,184,0.6)",
                 "target-arrow-shape": "triangle",
                 "curve-style": "bezier",
+                "arrow-scale": 0.8,
+              },
+            },
+            {
+              selector: "edge[kind = 'belongs_to']",
+              style: {
+                "line-color": "rgba(168,85,247,0.4)",
+                "target-arrow-color": "rgba(168,85,247,0.5)",
+                "line-style": "dotted",
+                width: 1,
+              },
+            },
+            {
+              selector: "edge[kind = 'child_of']",
+              style: {
+                "line-color": "rgba(96,165,250,0.6)",
+                "target-arrow-color": "rgba(96,165,250,0.7)",
+                width: 1.5,
+              },
+            },
+            {
+              selector: "edge[kind = 'references_wiki']",
+              style: {
+                "line-color": "#3b82f6",
+                "target-arrow-color": "#3b82f6",
+                width: 2,
               },
             },
             {
               selector: "edge[kind = 'references_entity']",
-              style: { "line-style": "dashed", "line-color": "#10b981" },
+              style: {
+                "line-style": "dashed",
+                "line-color": "rgba(16,185,129,0.6)",
+                "target-arrow-color": "rgba(16,185,129,0.7)",
+              },
             },
           ],
-          layout: {
-            name: layout === "cose-bilkent" ? "cose" : layout,
-            animate: false,
-          },
+          layout:
+            layout === "concentric"
+              ? {
+                  name: "concentric",
+                  fit: true,
+                  padding: 50,
+                  minNodeSpacing: 28,
+                  // Channel hub at center, then top-level pages, then deeper.
+                  concentric: (node: { data: (k: string) => unknown }) => {
+                    const kind = node.data("kind");
+                    if (kind === "channel") return 1000;
+                    const pageKind = node.data("page_kind") || "";
+                    if (pageKind === "fixed") return 100;
+                    if (pageKind === "sub-topic") return 10;
+                    return 50;
+                  },
+                  levelWidth: () => 1,
+                  animate: false,
+                }
+              : layout === "dagre"
+                ? { name: "dagre", rankDir: "TB", animate: false }
+                : layout === "grid"
+                  ? { name: "grid", animate: false }
+                  : { name: "cose", animate: false },
         });
-        const cyTyped = cy as unknown as {
-          on: (event: string, selector: string, handler: (e: { target: { id: () => string } }) => void) => void;
-          destroy: () => void;
-        };
-        cyTyped.on("tap", "node", (e) => {
-          handleNodeClickRef.current(e.target.id());
+        cy.on("tap", "node", (e) => {
+          handleNodeTapRef.current(e.target.data());
         });
         cyRef.current = cy;
         setCytoscapeReady(true);
@@ -202,16 +401,17 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
       }
       cyRef.current = null;
     };
-    // ``handleNodeClickRef`` is intentionally absent from this effect's
-    // deps — the ref's `.current` is updated above on every render so
-    // the tap handler always sees the latest closure without needing
-    // to remount cytoscape on channelId / navigate identity changes.
-  }, [filtered, layout]);
+    // ``handleNodeTapRef`` intentionally absent — the ref's `.current`
+    // is updated above so cytoscape always sees the latest closure
+    // without needing to remount.
+  }, [elements, layout]);
 
   return (
     <div className="flex h-full flex-col" data-testid="wiki-graph-root">
       <header className="flex flex-wrap items-center gap-3 border-b border-border bg-card/60 px-5 py-3">
-        <h2 className="text-base font-semibold text-foreground">Wiki graph</h2>
+        <h2 className="text-base font-semibold text-foreground whitespace-nowrap">
+          Wiki graph
+        </h2>
         <select
           aria-label="Filter by page kind"
           value={filters.kind}
@@ -244,7 +444,7 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
           <option value="24h">Last 24h</option>
           <option value="7d">Last 7d</option>
         </select>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+        <label className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
           Citation density ≥
           <input
             aria-label="Minimum citation density"
@@ -269,60 +469,196 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
           onChange={(e) => setLayout(e.target.value as LayoutKey)}
           className="rounded-md border border-border bg-background px-2 py-1 text-xs"
         >
-          <option value="cose-bilkent">cose-bilkent</option>
-          <option value="dagre">dagre</option>
-          <option value="grid">grid</option>
+          <option value="concentric">Concentric (hub-first)</option>
+          <option value="dagre">Dagre (top-down)</option>
+          <option value="cose">Cose (force-directed)</option>
+          <option value="grid">Grid</option>
         </select>
         <button
           type="button"
           onClick={() => refetch()}
-          className="rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-muted"
+          className="rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-muted whitespace-nowrap"
         >
           Refresh
         </button>
+        <Legend />
       </header>
 
-      <div className="relative flex-1 bg-muted/10">
-        {error && (
+      <div className="relative flex flex-1 min-h-0">
+        <div className="relative flex-1 bg-muted/10">
+          {error && (
+            <div
+              className="absolute inset-0 flex items-center justify-center text-sm text-red-500"
+              role="alert"
+            >
+              {error}
+            </div>
+          )}
+          {cytoscapeError && (
+            <div
+              className="absolute inset-0 flex items-center justify-center text-sm text-amber-500"
+              role="alert"
+            >
+              Graph engine failed to load: {cytoscapeError}
+            </div>
+          )}
+          {(isLoading || (!cytoscapeReady && !cytoscapeError)) && (
+            <div
+              className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground"
+              data-testid="wiki-graph-loading"
+            >
+              Loading wiki graph…
+            </div>
+          )}
           <div
-            className="absolute inset-0 flex items-center justify-center text-sm text-red-500"
-            role="alert"
-          >
-            {error}
-          </div>
+            ref={containerRef}
+            className="h-full w-full"
+            data-testid="wiki-graph-canvas"
+            data-node-count={filtered?.nodes.length ?? 0}
+            data-edge-count={filtered?.edges.length ?? 0}
+          />
+        </div>
+
+        {selection && (
+          <WikiGraphPanel
+            channelId={channelId}
+            selection={selection}
+            onClose={() => setSelection(null)}
+          />
         )}
-        {cytoscapeError && (
-          <div
-            className="absolute inset-0 flex items-center justify-center text-sm text-amber-500"
-            role="alert"
-          >
-            Graph engine failed to load: {cytoscapeError}
-          </div>
-        )}
-        {(isLoading || (!cytoscapeReady && !cytoscapeError)) && (
-          <div
-            className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground"
-            data-testid="wiki-graph-loading"
-          >
-            Loading wiki graph…
-          </div>
-        )}
-        <div
-          ref={containerRef}
-          className="h-full w-full"
-          data-testid="wiki-graph-canvas"
-          data-node-count={filtered?.nodes.length ?? 0}
-          data-edge-count={filtered?.edges.length ?? 0}
-        />
       </div>
 
       <footer className="flex items-center justify-between border-t border-border bg-card/60 px-5 py-2 text-xs text-muted-foreground">
         <span>
           {filtered?.nodes.length ?? 0} nodes · {filtered?.edges.length ?? 0} edges
+          {selection && (
+            <>
+              {" · "}
+              <span className="text-foreground">{selection.label}</span> selected
+            </>
+          )}
         </span>
         <span className="opacity-70">channel {channelId}</span>
       </footer>
     </div>
+  );
+}
+
+function Legend() {
+  const items: Array<{ color: string; label: string }> = [
+    { color: KIND_COLORS.channel, label: "Channel hub" },
+    { color: KIND_COLORS.wiki_overview, label: "Overview" },
+    { color: KIND_COLORS.wiki_topic, label: "Topic" },
+    { color: KIND_COLORS.wiki_subtopic, label: "Sub-topic" },
+    { color: KIND_COLORS.wiki_decisions, label: "Decisions" },
+    { color: KIND_COLORS.wiki_faq, label: "FAQ" },
+    { color: KIND_COLORS.entity, label: "Entity" },
+  ];
+  return (
+    <div className="ml-auto flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+      {items.map((item) => (
+        <span key={item.label} className="inline-flex items-center gap-1">
+          <span
+            className="inline-block h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: item.color }}
+          />
+          {item.label}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+interface WikiGraphPanelProps {
+  channelId?: string;
+  selection: WikiGraphSelectionData;
+  onClose: () => void;
+}
+
+function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) {
+  const navigate = useNavigate();
+  const goToWikiPage = () => {
+    if (!channelId || !selection.pageId) return;
+    // Navigate to the channel wiki tab with the selected page in the
+    // query param. WikiTab consumes ``?page={pageId}`` and points
+    // ``activePageId`` at it on mount.
+    navigate(
+      `/channels/${channelId}/wiki?page=${encodeURIComponent(selection.pageId)}`,
+    );
+  };
+
+  return (
+    <aside
+      className="w-80 shrink-0 border-l border-border bg-card overflow-y-auto"
+      role="complementary"
+      aria-label="Wiki graph node details"
+      data-testid="wiki-graph-panel"
+    >
+      <div className="flex items-center justify-between border-b border-border px-4 py-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {selection.isChannel
+            ? "Channel hub"
+            : selection.isEntity
+              ? "Entity"
+              : "Wiki page"}
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md p-1 text-muted-foreground hover:bg-muted"
+          aria-label="Close preview"
+        >
+          <X size={14} />
+        </button>
+      </div>
+      <div className="space-y-3 px-4 py-4">
+        <div>
+          <h3 className="text-base font-semibold text-foreground leading-tight">
+            {selection.label}
+          </h3>
+          {selection.sectionNumber && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Section {selection.sectionNumber}
+            </p>
+          )}
+          {selection.pageKind && !selection.isChannel && !selection.isEntity && (
+            <p className="mt-1 text-xs text-muted-foreground capitalize">
+              Kind: {selection.pageKind}
+            </p>
+          )}
+        </div>
+        {selection.summary && (
+          <p className="text-sm text-foreground/80 leading-relaxed">
+            {selection.summary}
+          </p>
+        )}
+        {!selection.summary && !selection.isChannel && !selection.isEntity && (
+          <p className="text-xs text-muted-foreground italic">
+            No summary cached yet. Open the page to read its content.
+          </p>
+        )}
+        {typeof selection.memoryCount === "number" && selection.memoryCount > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {selection.memoryCount} memories
+          </p>
+        )}
+        {selection.lastUpdated && (
+          <p className="text-xs text-muted-foreground">
+            Updated {new Date(selection.lastUpdated).toLocaleString()}
+          </p>
+        )}
+        {!selection.isChannel && !selection.isEntity && selection.pageId && (
+          <button
+            type="button"
+            onClick={goToWikiPage}
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+          >
+            <ExternalLink size={12} />
+            Open in Wiki tab
+          </button>
+        )}
+      </div>
+    </aside>
   );
 }
 

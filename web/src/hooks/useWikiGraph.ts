@@ -12,11 +12,20 @@ export interface WikiGraphNode {
   data: {
     id: string;
     label?: string;
-    kind?: "wiki" | "entity";
+    kind?: "wiki" | "entity" | "channel";
     page_kind?: string;
     version?: number;
     last_updated?: string;
     entity_type?: string;
+    // Mongo-fallback enrichments — present when nodes come from the
+    // legacy ``wiki_cache`` document or the redesign ``wiki_pages``
+    // store.
+    page_id?: string;
+    slug?: string;
+    section_number?: string;
+    summary?: string;
+    memory_count?: number;
+    legacy?: boolean;
   };
 }
 
@@ -25,7 +34,8 @@ export interface WikiGraphEdge {
     id: string;
     source: string;
     target: string;
-    kind?: "references_wiki" | "references_entity";
+    kind?: "references_wiki" | "references_entity" | "child_of" | "belongs_to";
+    legacy?: boolean;
   };
 }
 
