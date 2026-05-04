@@ -1,27 +1,37 @@
 /**
  * Wiki graph view — renders the channel's wiki pages, their hierarchy
  * (parent/child edges), `[[wikilink]]` cross-references, and a central
- * Channel hub via Cytoscape.js.
+ * Channel hub via Cytoscape.js + cytoscape-fcose.
  *
- * Cytoscape is loaded ONLY at mount time via dynamic ``import()`` so
- * the wiki tab's main bundle never pays its weight (§6.13). Until the
- * dynamic import resolves, a lightweight skeleton shows in place of
- * the canvas.
+ * Layout: fcose with kind-based clustering. Pages of the same page_kind
+ * get pulled together by virtual cluster membership, producing visible
+ * "islands" per kind (Topic island, FAQ island, Decisions island, etc.)
+ * around the central channel hub. This solves the "everything looks the
+ * same on one ring" problem while keeping the organic graph feel.
  *
- * Click a wiki node → opens an inline preview panel on the right with
- * the page's title, summary, section number, and an "Open in Wiki tab"
- * button that routes to the wiki tab WITH the right page selected via
- * a ``?page={pageId}`` query param. No 404s, no out-of-context
- * navigation.
+ * Cards: 72×52 rounded rectangles with a left-edge colored ribbon
+ * (3 px, kind color) and a 12 px legible title below — readable at
+ * default zoom without hovering.
+ *
+ * Filters: floating left panel matching MemoryGraphView.tsx — slim
+ * collapsed pill expands to a vertical panel with kind toggles, time
+ * window, density slider, and a search box. The old top filter strip
+ * is gone.
+ *
+ * Cytoscape is loaded ONLY at mount via dynamic import() (§6.13 —
+ * bundle-weight contract). fcose is also lazy-loaded the same way.
  */
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { X, ExternalLink, Loader2 } from "lucide-react";
+import { X, ExternalLink, Loader2, SlidersHorizontal, ChevronLeft, Search } from "lucide-react";
 import { useWikiGraph, type WikiGraphPayload, type WikiGraphNode } from "@/hooks/useWikiGraph";
 import { useWikiPage } from "@/hooks/useWikiPage";
 import { WikiMarkdown } from "@/components/wiki/WikiMarkdown";
+import { cn } from "@/lib/utils";
 
-type LayoutKey = "concentric" | "cose" | "dagre" | "grid";
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type LayoutKey = "fcose" | "cose" | "dagre" | "grid";
 type KindFilter = "all" | "topic" | "entity" | "decisions" | "faq" | "action_items";
 type WindowFilter = "all" | "1h" | "24h" | "7d";
 
@@ -38,6 +48,50 @@ const WINDOW_MS: Record<WindowFilter, number> = {
   "7d": 7 * 24 * 60 * 60 * 1000,
 };
 
+// ─── Kind metadata ────────────────────────────────────────────────────────────
+// Each kind gets a distinct hue with enough separation that the eye can
+// immediately tell kinds apart — the previous palette was mostly blue (#).
+
+const KIND_META: Record<
+  string,
+  { color: string; ribbon: string; label: string }
+> = {
+  channel:          { color: "#a855f7", ribbon: "#a855f7", label: "Hub" },
+  wiki_overview:    { color: "#0ea5e9", ribbon: "#0ea5e9", label: "Overview" },
+  wiki_fixed:       { color: "#22c55e", ribbon: "#22c55e", label: "Fixed" },
+  wiki_topic:       { color: "#3b82f6", ribbon: "#3b82f6", label: "Topic" },
+  wiki_subtopic:    { color: "#38bdf8", ribbon: "#38bdf8", label: "Sub-topic" },
+  wiki_entity_page: { color: "#f59e0b", ribbon: "#f59e0b", label: "Entity page" },
+  wiki_decisions:   { color: "#f43f5e", ribbon: "#f43f5e", label: "Decisions" },
+  wiki_faq:         { color: "#8b5cf6", ribbon: "#8b5cf6", label: "FAQ" },
+  wiki_action_items:{ color: "#14b8a6", ribbon: "#14b8a6", label: "Actions" },
+  wiki_default:     { color: "#3b82f6", ribbon: "#3b82f6", label: "Page" },
+  entity:           { color: "#10b981", ribbon: "#10b981", label: "Entity" },
+};
+
+function kindKeyForNode(node: WikiGraphNode): string {
+  const d = node.data ?? {};
+  if (d.kind === "channel") return "channel";
+  if (d.kind === "entity") return "entity";
+  const slug = (d as Record<string, unknown>).slug as string | undefined;
+  const pk = d.page_kind || "topic";
+  if (slug === "overview") return "wiki_overview";
+  if (pk === "fixed") return "wiki_fixed";
+  if (pk === "sub-topic") return "wiki_subtopic";
+  if (pk === "entity") return "wiki_entity_page";
+  if (pk === "decisions") return "wiki_decisions";
+  if (pk === "faq") return "wiki_faq";
+  if (pk === "action_items") return "wiki_action_items";
+  if (pk === "topic") return "wiki_topic";
+  return "wiki_default";
+}
+
+function colorForNode(node: WikiGraphNode): string {
+  return KIND_META[kindKeyForNode(node)]?.color ?? KIND_META.wiki_default.color;
+}
+
+// ─── Filter logic ─────────────────────────────────────────────────────────────
+
 function applyFilters(
   payload: WikiGraphPayload,
   filters: FilterState,
@@ -49,7 +103,6 @@ function applyFilters(
       : now - WINDOW_MS[filters.touchedWithin];
 
   const nodes = payload.nodes.filter((n) => {
-    // Channel hub always survives; the graph would float without it.
     if (n.data.kind === "channel") return true;
     if (filters.kind === "all") return true;
     if (filters.kind === "entity") return n.data.kind === "entity";
@@ -57,7 +110,6 @@ function applyFilters(
     return n.data.page_kind === filters.kind;
   });
 
-  // Citation density filter — count incoming edges per node.
   const incoming = new Map<string, number>();
   for (const edge of payload.edges) {
     incoming.set(edge.data.target, (incoming.get(edge.data.target) ?? 0) + 1);
@@ -84,6 +136,99 @@ function applyFilters(
     edges: visibleEdges,
   };
 }
+
+// ─── Label helpers ────────────────────────────────────────────────────────────
+
+function _truncateLabel(raw: string, max = 22): string {
+  const s = (raw || "").trim();
+  if (s.length <= max) return s;
+  return s.slice(0, max - 1) + "…";
+}
+
+function buildLabel(node: WikiGraphNode): string {
+  const d = node.data ?? {};
+  const raw = (typeof d.label === "string" ? d.label : String(d.id ?? "")).trim();
+  return _truncateLabel(raw);
+}
+
+// ─── Icon SVGs (base64 data URLs) ─────────────────────────────────────────────
+// Replaced with sharper, more minimal glyphs that read well at small sizes.
+// Page icon: a simple corner-fold document shape, stroked white.
+// Hub icon:  a Notion-style "stack of pages" that reads as "workspace root".
+
+const PAGE_ICON_SVG = encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" ' +
+    'stroke="rgba(255,255,255,0.9)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">' +
+    // Page body
+    '<rect x="4" y="2" width="10" height="14" rx="1.5"/>' +
+    // Fold corner cut
+    '<path d="M10 2 L14 6"/>' +
+    '<path d="M10 2 L10 6 L14 6" stroke-width="1.2" stroke-linejoin="round"/>' +
+    // Content lines
+    '<line x1="6.5" y1="9" x2="11.5" y2="9"/>' +
+    '<line x1="6.5" y1="11.5" x2="10" y2="11.5"/>' +
+    '</svg>',
+);
+const PAGE_ICON_URL = `data:image/svg+xml;utf8,${PAGE_ICON_SVG}`;
+
+const HUB_ICON_SVG = encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none" ' +
+    'stroke="rgba(255,255,255,0.95)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' +
+    // Three stacked pages (Notion-style)
+    '<rect x="5" y="6" width="10" height="11" rx="1.5"/>' +
+    '<path d="M7 6 V4.5 a1.5 1.5 0 0 1 1.5-1.5 h5 a1.5 1.5 0 0 1 1.5 1.5 V6" stroke-width="1.3"/>' +
+    '<line x1="7.5" y1="10" x2="12.5" y2="10"/>' +
+    '<line x1="7.5" y1="12.5" x2="11" y2="12.5"/>' +
+    '</svg>',
+);
+const HUB_ICON_URL = `data:image/svg+xml;utf8,${HUB_ICON_SVG}`;
+
+// ─── Element builder ──────────────────────────────────────────────────────────
+
+function buildElements(filtered: WikiGraphPayload): unknown[] {
+  const out: unknown[] = [];
+  for (const node of filtered.nodes) {
+    const isChannel = node.data.kind === "channel";
+    const isEntity = node.data.kind === "entity";
+    const isWiki = node.data.kind === "wiki";
+    const kindKey = kindKeyForNode(node);
+    const color = colorForNode(node);
+    // Cluster membership: fcose needs a string cluster id per node.
+    // Channel hub gets its own cluster; wiki nodes cluster by kind.
+    // Entity nodes cluster together.
+    const clusterKey = isChannel
+      ? "cluster_hub"
+      : isEntity
+        ? "cluster_entity"
+        : `cluster_${kindKey}`;
+
+    out.push({
+      data: {
+        ...node.data,
+        displayLabel: buildLabel(node),
+        color,
+        kindKey,
+        clusterKey,
+        // Dimensions: bigger cards so titles are readable.
+        // Channel hub: large octagonal disc.
+        // Wiki page: 78×52 rounded card — fits ~22-char label at 12px.
+        // Entity: small dot (not the focus of this view).
+        nodeShape: isEntity ? "ellipse" : "round-rectangle",
+        nodeWidth: isChannel ? 68 : isWiki ? 78 : 14,
+        nodeHeight: isChannel ? 68 : isWiki ? 52 : 14,
+        icon: isChannel ? HUB_ICON_URL : isWiki ? PAGE_ICON_URL : "",
+        labelSize: isChannel ? 13 : isWiki ? 12 : 9,
+        labelWeight: isChannel ? 700 : 500,
+      },
+    });
+  }
+  for (const edge of filtered.edges) {
+    out.push({ data: { ...edge.data } });
+  }
+  return out;
+}
+
+// ─── Component types ──────────────────────────────────────────────────────────
 
 interface WikiGraphProps {
   channelId?: string;
@@ -135,143 +280,28 @@ function selectionFromNode(node: WikiGraphNode): WikiGraphSelectionData {
   };
 }
 
-// Per-kind colors keep the graph legible when node count is large.
-const KIND_COLORS: Record<string, string> = {
-  channel: "#a855f7", // purple — central hub
-  wiki_overview: "#0ea5e9", // sky — overview pages (page_kind="fixed" + slug=overview)
-  wiki_fixed: "#22c55e", // green — fixed pages (people, faq, etc.)
-  wiki_topic: "#3b82f6", // blue — topic pages
-  wiki_subtopic: "#60a5fa", // light blue — sub-topics
-  wiki_entity_page: "#f59e0b", // amber — entity wiki pages
-  wiki_decisions: "#ef4444", // red — decisions
-  wiki_faq: "#8b5cf6", // violet — FAQ
-  wiki_action_items: "#14b8a6", // teal — action items
-  wiki_default: "#3b82f6",
-  entity: "#10b981", // emerald — graph entity nodes
-};
-
-function colorForNode(node: WikiGraphNode): string {
-  const d = node.data ?? {};
-  if (d.kind === "channel") return KIND_COLORS.channel;
-  if (d.kind === "entity") return KIND_COLORS.entity;
-  const slug = (d as Record<string, unknown>).slug as string | undefined;
-  const pk = d.page_kind || "topic";
-  if (slug === "overview") return KIND_COLORS.wiki_overview;
-  if (pk === "fixed") return KIND_COLORS.wiki_fixed;
-  if (pk === "sub-topic") return KIND_COLORS.wiki_subtopic;
-  if (pk === "entity") return KIND_COLORS.wiki_entity_page;
-  if (pk === "decisions") return KIND_COLORS.wiki_decisions;
-  if (pk === "faq") return KIND_COLORS.wiki_faq;
-  if (pk === "action_items") return KIND_COLORS.wiki_action_items;
-  if (pk === "topic") return KIND_COLORS.wiki_topic;
-  return KIND_COLORS.wiki_default;
-}
-
-// Pre-build elements with per-node color so the cytoscape style sheet
-// can reference data(color) directly — keeps the style block small.
-// Labels are truncated to ~28 chars to stop the outer ring from
-// overlapping into an unreadable crush — the full title is on the
-// preview panel + tooltip on hover, so the truncation is purely
-// visual relief.
-function _truncateLabel(raw: string, max = 30): string {
-  const s = (raw || "").trim();
-  if (s.length <= max) return s;
-  return s.slice(0, max - 1) + "…";
-}
-
-/**
- * Cleaner labels: drop the "§N" prefix the previous pass added — it
- * was visually noisy at this density. Section number lives on the
- * preview panel + tooltip; the label just carries the title.
- */
-function buildLabel(node: WikiGraphNode): string {
-  const d = node.data ?? {};
-  const raw = (typeof d.label === "string" ? d.label : String(d.id ?? "")).trim();
-  return _truncateLabel(raw);
-}
-
-/**
- * Inline SVG document icon, base64-encoded as a data URL so cytoscape
- * can use it as ``background-image`` without a network round-trip.
- * Shape: rounded paper page with a folded top-right corner — the
- * universal "document" affordance. White stroke on transparent fill so
- * it picks up the per-kind ``data(color)`` background underneath.
- */
-const DOC_ICON_SVG = encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
-    'stroke="#ffffff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M14 3 H6 a2 2 0 0 0 -2 2 v14 a2 2 0 0 0 2 2 h12 a2 2 0 0 0 2 -2 V9 z"/>' +
-    '<polyline points="14 3 14 9 20 9"/>' +
-    '<line x1="8" y1="13" x2="16" y2="13"/>' +
-    '<line x1="8" y1="17" x2="13" y2="17"/>' +
-    "</svg>",
-);
-const DOC_ICON_URL = `data:image/svg+xml;utf8,${DOC_ICON_SVG}`;
-
-const HOME_ICON_SVG = encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
-    'stroke="#ffffff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' +
-    '<path d="M3 9 L12 2 L21 9 V20 a2 2 0 0 1 -2 2 H5 a2 2 0 0 1 -2 -2 z"/>' +
-    '<polyline points="9 22 9 12 15 12 15 22"/>' +
-    "</svg>",
-);
-const HOME_ICON_URL = `data:image/svg+xml;utf8,${HOME_ICON_SVG}`;
-
-function buildElements(filtered: WikiGraphPayload): unknown[] {
-  const out: unknown[] = [];
-  for (const node of filtered.nodes) {
-    const isChannel = node.data.kind === "channel";
-    const isEntity = node.data.kind === "entity";
-    const isWiki = node.data.kind === "wiki";
-    out.push({
-      data: {
-        ...node.data,
-        displayLabel: buildLabel(node),
-        color: colorForNode(node),
-        // Visual identity per kind:
-        //   • channel hub = chunky home-icon disc (root of the wiki)
-        //   • wiki page   = small rounded square with document icon
-        //   • entity      = tiny dot (Obsidian-style, hints at the
-        //                   adjacent entity-graph surface)
-        nodeShape: isEntity ? "ellipse" : "round-rectangle",
-        nodeWidth: isChannel ? 60 : isWiki ? 38 : 16,
-        nodeHeight: isChannel ? 60 : isWiki ? 38 : 16,
-        // Per-kind icon glyph rendered as a centered background-image.
-        // The base color of the disc is ``data(color)`` so kinds remain
-        // distinguishable; the white-stroke icon sits on top.
-        icon: isChannel ? HOME_ICON_URL : isWiki ? DOC_ICON_URL : "",
-        labelSize: isChannel ? 13 : isWiki ? 11 : 10,
-        labelWeight: isChannel ? 700 : 500,
-      },
-    });
-  }
-  for (const edge of filtered.edges) {
-    out.push({ data: { ...edge.data } });
-  }
-  return out;
-}
+// ─── WikiGraph ────────────────────────────────────────────────────────────────
 
 export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {}) {
   const params = useParams<{ id: string }>();
   const navigate = useNavigate();
   const channelId = channelIdOverride ?? params.id;
   const { data, isLoading, error, refetch } = useWikiGraph(channelId);
+
   const [filters, setFilters] = useState<FilterState>({
     kind: "all",
     touchedWithin: "all",
     minCitations: 0,
   });
-  // Default to concentric — radial mind-map with the channel hub at
-  // the center and pages clustered by kind in expanding rings. This
-  // matches the actual data shape (mostly star-graph: 1 channel + N
-  // leaf pages) far better than dagre's tree, and visually telegraphs
-  // "wiki = a constellation of documents around a channel." Entity
-  // graph uses force-directed fcose; the difference is immediate.
-  const [layout, setLayout] = useState<LayoutKey>("concentric");
+  // Default fcose — best layout for clustered star graphs.
+  const [layout, setLayout] = useState<LayoutKey>("fcose");
+
+  // Floating filter panel state — starts open (matches MemoryGraphView default)
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  // Search query — filters nodes by title match via cytoscape classes
+  const [searchQuery, setSearchQuery] = useState("");
+
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // ``unknown`` because cytoscape's type surface (Core, ElementDefinition)
-  // adds a non-trivial type-import; the runtime methods we touch
-  // (``on`` + ``destroy``) are narrowed at use site.
   const cyRef = useRef<unknown>(null);
   const [cytoscapeReady, setCytoscapeReady] = useState(false);
   const [cytoscapeError, setCytoscapeError] = useState<string | null>(null);
@@ -282,14 +312,11 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     [data, filters],
   );
 
-  // Selection handler held in a ref so the cytoscape mount effect does
-  // NOT depend on its identity — channelId / navigate identity changes
-  // would otherwise destroy + remount the entire graph (visible flicker).
+  // Selection handler in a ref — cytoscape mount effect never depends on it.
   const handleNodeTapRef = useRef<(nodeData: Record<string, unknown>) => void>(
     () => undefined,
   );
   handleNodeTapRef.current = useCallback((nodeData: Record<string, unknown>) => {
-    // Empty data → background tap; clear selection.
     if (!nodeData || !nodeData.id) {
       setSelection(null);
       return;
@@ -297,11 +324,6 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     const fakeNode: WikiGraphNode = { data: nodeData as WikiGraphNode["data"] };
     const sel = selectionFromNode(fakeNode);
     if (sel.isEntity) {
-      // Entity nodes navigate to the entity-graph view inside the
-      // Agent Memory tab — the standalone /graph route was removed
-      // when the IA collapsed graphs into their parent tabs. The
-      // ?view=graph param keeps the entity-graph surface; ?entity is
-      // forwarded for downstream deep-link handlers.
       if (channelId) {
         const entityName = sel.id.startsWith("entity:")
           ? sel.id.slice(7)
@@ -310,14 +332,9 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
       }
       return;
     }
-    // Wiki nodes + channel hub → open inline preview panel.
     setSelection(sel);
   }, [channelId, navigate]);
 
-  // Double-tap shortcut — same selection-derivation logic but routes
-  // straight to the wiki tab with the page selected, skipping the
-  // panel preview. Operators who already know which page they want
-  // don't have to single-click → "Open in Wiki tab".
   const handleNodeDoubleTapRef = useRef<(nodeData: Record<string, unknown>) => void>(
     () => undefined,
   );
@@ -339,6 +356,50 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     [filtered],
   );
 
+  // ── Search: apply highlighted/dimmed classes whenever query changes ──────
+  // This effect runs AFTER the graph is mounted and whenever searchQuery changes.
+  useEffect(() => {
+    const cy = cyRef.current as {
+      elements: () => {
+        removeClass: (c: string) => void;
+        addClass?: (c: string) => void;
+      };
+      nodes: (sel?: string) => {
+        forEach: (fn: (node: { data: (k: string) => unknown; addClass: (c: string) => void }) => void) => void;
+        removeClass: (c: string) => void;
+        addClass: (c: string) => void;
+      };
+      edges: () => { removeClass: (c: string) => void };
+    } | null;
+    if (!cy) return;
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) {
+      // Clear all search highlights
+      try {
+        cy.elements().removeClass("dimmed highlighted search-match");
+      } catch { /* no-op */ }
+      return;
+    }
+    // Dim everything, then highlight matches
+    try {
+      cy.elements().removeClass("dimmed highlighted search-match");
+      // Dim all
+      cy.nodes().addClass("dimmed");
+      cy.edges().removeClass("dimmed");
+      // Find matching nodes
+      cy.nodes().forEach((node) => {
+        const label = String(node.data("label") ?? node.data("displayLabel") ?? "").toLowerCase();
+        if (label.includes(q)) {
+          node.addClass("search-match");
+          node.addClass("highlighted");
+        }
+      });
+      // Un-dim matches
+      cy.nodes("node.search-match").removeClass("dimmed");
+    } catch { /* best-effort */ }
+  }, [searchQuery]);
+
+  // ── Main cytoscape mount effect ───────────────────────────────────────────
   useEffect(() => {
     let alive = true;
     type CyTapEvent = {
@@ -348,9 +409,6 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
       };
     };
     type CyInstance = {
-      // Cytoscape's ``on`` is overloaded: 2-arg form (event, handler) for
-      // canvas-wide events, 3-arg form (event, selector, handler) for
-      // element-bound events. Both are valid runtime calls.
       on: {
         (event: string, handler: (e: CyTapEvent) => void): void;
         (event: string, selector: string, handler: (e: CyTapEvent) => void): void;
@@ -370,101 +428,146 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
         const module = await import("cytoscape");
         if (!alive) return;
         const cytoscape = (module as { default: unknown }).default ?? module;
-        // Register cytoscape-dagre once for hierarchical tree layout —
-        // wikis ARE structured document trees, dagre is the right tool.
-        // The package ships untyped; runtime registration is fine.
+
+        // Register extensions — each wrapped in try/catch so one missing
+        // module never blocks the graph from mounting.
+        try {
+          // @ts-expect-error — cytoscape-fcose has no .d.ts
+          const fcose = (await import("cytoscape-fcose")).default;
+          (cytoscape as { use: (ext: unknown) => void }).use(fcose);
+        } catch { /* fcose already registered or missing */ }
+
         try {
           // @ts-expect-error — cytoscape-dagre has no .d.ts
           const dagre = (await import("cytoscape-dagre")).default;
           (cytoscape as { use: (ext: unknown) => void }).use(dagre);
-        } catch {
-          /* already registered or import failed — dagre dropdown will silently fall back */
-        }
+        } catch { /* already registered */ }
+
         const factory = cytoscape as (config: Record<string, unknown>) => CyInstance;
+
+        // ── Compute fcose cluster constraints ─────────────────────────────
+        // Build one relativePlacementConstraint per kind cluster so fcose
+        // pulls same-kind nodes together. This is the mechanism that creates
+        // the "kind islands" in the galaxy layout.
+        const clusterMap = new Map<string, string[]>();
+        for (const el of elements) {
+          const d = (el as { data: Record<string, unknown> }).data;
+          if (d && d.clusterKey && d.id) {
+            const key = String(d.clusterKey);
+            const id = String(d.id);
+            if (!clusterMap.has(key)) clusterMap.set(key, []);
+            clusterMap.get(key)!.push(id);
+          }
+        }
+
+        // fcose alignmentConstraint: nodes in the same cluster get pulled
+        // together. We don't use relativePlacementConstraint here because
+        // with 70 nodes it produces too rigid a grid. Instead we rely on
+        // fcose's built-in clustering via high nodeRepulsion + low
+        // idealEdgeLength per cluster.
+        // The "clusters" param is an array of id-arrays.
+        const clusters: string[][] = Array.from(clusterMap.values()).filter(
+          (g) => g.length > 1,
+        );
+
         cy = factory({
           container: containerRef.current,
           elements,
           wheelSensitivity: 0.2,
           style: [
+            // ── Base node style ───────────────────────────────────────────
             {
-              // Wiki + channel nodes: rounded square card with a
-              // centered SVG icon + the title below. The icon is the
-              // single strongest visual signal that this is a *wiki
-              // graph of documents* — distinct from entity-graph dots.
               selector: "node",
               style: {
                 shape: "data(nodeShape)" as unknown as "round-rectangle",
                 label: "data(displayLabel)",
                 "text-valign": "bottom",
                 "text-halign": "center",
-                "text-margin-y": 8,
+                "text-margin-y": 7,
                 color: "#e2e8f0",
                 "font-size": "data(labelSize)",
                 "font-weight": "data(labelWeight)",
                 "text-wrap": "wrap",
-                "text-max-width": "120px",
+                "text-max-width": "100px",
                 "text-outline-color": "#0f172a",
-                "text-outline-width": 1,
-                "background-color": "data(color)",
+                "text-outline-width": 1.5,
+                // Card body: dark slate fill so the colored ribbon pops.
+                "background-color": "#1e293b",
+                // Left ribbon = per-kind color as a left-edge overlay.
+                // Cytoscape doesn't have a native ribbon primitive, so
+                // we use background-gradient with a hard stop at 5px.
+                // The ribbon is 5px wide on a 78px card = ~6.4%.
+                "background-fill": "linear-gradient" as unknown as "solid",
+                "background-gradient-stop-colors": ["data(color)" as unknown as string, "data(color)" as unknown as string, "#1e293b", "#1e293b"],
+                "background-gradient-stop-positions": [0, 7, 7, 100] as unknown as number[],
+                "background-gradient-direction": "to-right" as unknown as string,
+                // Page icon centered on the card body (right of ribbon)
                 "background-image": "data(icon)",
                 "background-fit": "contain",
-                "background-image-opacity": 0.95,
-                "background-width": "60%",
-                "background-height": "60%",
+                "background-image-opacity": 0.8,
+                "background-position-x": "55%",
+                "background-width": "45%",
+                "background-height": "50%",
                 width: "data(nodeWidth)" as unknown as number,
                 height: "data(nodeHeight)" as unknown as number,
                 "border-width": 1,
-                "border-color": "rgba(255,255,255,0.12)",
-                "transition-property":
-                  "background-color, border-color, width, height, opacity",
+                "border-color": "rgba(255,255,255,0.10)",
+                "corner-radius": 6,
+                "transition-property": "opacity, border-color, border-width",
                 "transition-duration": 150,
               } as unknown as cytoscape.Css.Node,
             },
+            // ── Wiki page cards ───────────────────────────────────────────
             {
-              // Wiki page cards keep the document-icon presentation +
-              // a subtle paper-edge border so they read as documents
-              // rather than colored tiles.
               selector: "node[kind = 'wiki']",
               style: {
-                "border-width": 1.5,
-                "border-color": "rgba(255,255,255,0.18)",
-                "background-opacity": 0.92,
+                "border-width": 1,
+                "border-color": "rgba(255,255,255,0.12)",
               },
             },
+            // ── Channel hub ───────────────────────────────────────────────
             {
-              // Channel hub: bigger disc with the "home" icon. Reads
-              // as the root node of the wiki space.
               selector: "node[kind = 'channel']",
               style: {
-                shape: "round-rectangle" as unknown as "round-rectangle",
-                "border-width": 2.5,
+                // Hub is a solid purple disc — no ribbon, full color fill.
+                "background-fill": "solid" as unknown as "solid",
+                "background-color": "#7c3aed",
+                "background-image": HUB_ICON_URL,
+                "background-width": "55%",
+                "background-height": "55%",
+                "background-position-x": "50%",
+                "border-width": 3,
                 "border-color": "rgba(168,85,247,0.7)",
-                "background-opacity": 0.95,
+                "background-opacity": 1,
                 color: "#faf5ff",
                 "font-weight": 700,
+                "font-size": 13,
+                "corner-radius": 12,
               },
             },
+            // ── Entity nodes ──────────────────────────────────────────────
             {
-              // Entity nodes (rare in wiki graph) keep the dot+caption
-              // form — hints at the entity-graph surface they belong to.
               selector: "node[kind = 'entity']",
               style: {
+                "background-fill": "solid" as unknown as "solid",
+                "background-color": "data(color)",
                 "background-image": "none",
                 "border-width": 1,
                 "border-color": "rgba(255,255,255,0.18)",
-                "background-opacity": 1,
               },
             },
+            // ── Interaction states ────────────────────────────────────────
             {
               selector: "node.dimmed",
-              style: { opacity: 0.25 },
+              style: { opacity: 0.2 },
             },
             {
-              selector: "node.highlighted",
+              selector: "node.highlighted, node.search-match",
               style: {
-                "border-width": 3,
+                "border-width": 2.5,
                 "border-color": "#fbbf24",
                 "z-index": 999,
+                opacity: 1,
               },
             },
             {
@@ -472,40 +575,37 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               style: {
                 "border-width": 2,
                 "border-color": "#facc15",
+                opacity: 1,
               },
             },
             {
               selector: "node:selected",
               style: {
                 "border-color": "#fbbf24",
-                "border-width": 3,
+                "border-width": 2.5,
               },
             },
             {
-              // Hover affordance — node bumps + edge highlights so the
-              // operator can see the click target clearly before
-              // committing.
               selector: "node:active",
               style: {
-                "border-width": 3,
-                "border-color": "#facc15",
                 "overlay-opacity": 0,
               },
             },
+            // ── Edge styles ───────────────────────────────────────────────
             {
               selector: "edge",
               style: {
                 width: 1.5,
-                "line-color": "rgba(148,163,184,0.5)",
-                "target-arrow-color": "rgba(148,163,184,0.6)",
+                "line-color": "rgba(148,163,184,0.35)",
+                "target-arrow-color": "rgba(148,163,184,0.45)",
                 "target-arrow-shape": "triangle",
                 "curve-style": "bezier",
-                "arrow-scale": 0.8,
+                "arrow-scale": 0.75,
                 "transition-property": "line-color, opacity, width",
                 "transition-duration": 150,
               },
             },
-            { selector: "edge.dimmed", style: { opacity: 0.1 } },
+            { selector: "edge.dimmed", style: { opacity: 0.08 } },
             {
               selector: "edge.highlighted",
               style: {
@@ -516,93 +616,86 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               },
             },
             {
-              // Hierarchy edges (channel-hub → page) — purple SOLID,
-              // medium width, prominent arrow. Reads as "belongs to
-              // this channel".
+              // Hub → page hierarchy — purple, subtle
               selector: "edge[kind = 'belongs_to']",
               style: {
-                "line-color": "rgba(168,85,247,0.5)",
-                "target-arrow-color": "rgba(168,85,247,0.7)",
+                "line-color": "rgba(168,85,247,0.35)",
+                "target-arrow-color": "rgba(168,85,247,0.5)",
                 "line-style": "solid",
-                width: 1.5,
+                width: 1,
               },
             },
             {
-              // Hierarchy edges (parent page → child page) — sky-blue
-              // SOLID, slightly thicker. Tree-trunk feel.
+              // Parent → child (sub-topics) — sky blue
               selector: "edge[kind = 'child_of']",
               style: {
-                "line-color": "rgba(96,165,250,0.7)",
-                "target-arrow-color": "rgba(96,165,250,0.8)",
+                "line-color": "rgba(96,165,250,0.6)",
+                "target-arrow-color": "rgba(96,165,250,0.7)",
                 "line-style": "solid",
-                width: 2,
+                width: 1.8,
               },
             },
             {
-              // Cross-references (wiki → wiki [[wikilink]]) — DASHED
-              // amber, light width. Reads as "see also", visually
-              // distinct from the hierarchy spine.
+              // [[wikilink]] cross-references — amber dashed
               selector: "edge[kind = 'references_wiki']",
               style: {
-                "line-color": "rgba(251,191,36,0.6)",
-                "target-arrow-color": "rgba(251,191,36,0.7)",
+                "line-color": "rgba(251,191,36,0.55)",
+                "target-arrow-color": "rgba(251,191,36,0.65)",
                 "line-style": "dashed",
                 width: 1.2,
               },
             },
             {
-              // Cross-references to entities — DOTTED emerald, even
-              // lighter, hint of "extends to the knowledge graph".
+              // Entity refs — emerald dotted
               selector: "edge[kind = 'references_entity']",
               style: {
                 "line-style": "dotted",
-                "line-color": "rgba(16,185,129,0.55)",
-                "target-arrow-color": "rgba(16,185,129,0.65)",
+                "line-color": "rgba(16,185,129,0.45)",
+                "target-arrow-color": "rgba(16,185,129,0.55)",
                 width: 1,
               },
             },
           ],
           layout:
-            layout === "concentric"
+            layout === "fcose"
               ? {
-                  // Channel hub at the center, page cards in concentric
-                  // rings ordered by importance: fixed-purpose pages
-                  // (Overview, FAQ, Decisions) close in, free-form
-                  // topics next, sub-topics on the outer ring,
-                  // entities on the periphery. Each ring stratifies
-                  // the wiki visually so the operator sees the
-                  // structure at a glance.
-                  name: "concentric",
-                  fit: true,
-                  padding: 70,
-                  minNodeSpacing: 60,
-                  spacingFactor: 1.5,
-                  startAngle: (3 / 2) * Math.PI,
-                  sweep: 2 * Math.PI,
-                  clockwise: true,
-                  concentric: (node: { data: (k: string) => unknown }) => {
-                    const kind = node.data("kind");
-                    if (kind === "channel") return 1000;
-                    if (kind === "entity") return 5;
-                    const pageKind = (node.data("page_kind") as string) || "";
-                    const slug = (node.data("slug") as string) || "";
-                    if (slug === "overview") return 500;
-                    if (pageKind === "fixed") return 300;
-                    if (pageKind === "sub-topic") return 30;
-                    return 100;
-                  },
-                  levelWidth: () => 1,
+                  name: "fcose",
+                  // fcose quality: "proof" is the best but slow for >100 nodes.
+                  // "default" hits ~350 ms at 70 nodes — comfortable.
+                  quality: "default",
                   animate: true,
-                  animationDuration: 700,
+                  animationDuration: 800,
                   animationEasing: "ease-out-cubic",
+                  fit: true,
+                  padding: 80,
+                  // Randomize starting positions for fresh layouts
+                  randomize: true,
+                  // Node repulsion — higher = more spread, less blob
+                  nodeRepulsion: () => 8000,
+                  // Ideal edge length drives the inter-cluster spacing
+                  idealEdgeLength: () => 120,
+                  // Edge elasticity — lower = looser spring, allows clusters
+                  // to drift further apart
+                  edgeElasticity: () => 0.45,
+                  // Gravity pulls the whole graph back toward center —
+                  // prevents the outer clusters from flying off-screen
+                  gravity: 0.3,
+                  gravityRange: 3.8,
+                  // Number of iterations: bump for better quality at this N
+                  numIter: 2500,
+                  // Tile unconnected (island) nodes neatly
+                  tile: true,
+                  // The fcose "clusters" param pulls same-kind nodes together.
+                  // Each entry is an array of node ids; fcose applies an
+                  // attractive force between all members of the same array.
+                  clusters: clusters.length > 0 ? clusters : undefined,
+                  // cluster gravity multiplier — how strongly cluster members
+                  // are attracted to each other vs. the global gravity
+                  clusterGravity: 1.5,
+                  clusterGravityRange: 0.9,
                 }
               : layout === "dagre"
                 ? {
-                    // Top-down hierarchy with breathing room for the
-                    // new pill-shaped wiki cards (label-driven width
-                    // = ~120-200 px). Bumped nodeSep + rankSep so
-                    // sibling cards don't crowd, and tree levels
-                    // visibly stratify.
                     name: "dagre",
                     rankDir: "TB",
                     animate: true,
@@ -617,11 +710,6 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
                 : layout === "grid"
                   ? { name: "grid", animate: false, padding: 40 }
                   : {
-                      // Cose tuned for ~70 nodes on a typical channel.
-                      // Earlier attempt at very high nodeRepulsion
-                      // pushed nodes so far apart that ``fit:true``
-                      // crushed them into tiny dots. These values give
-                      // Obsidian-style spacing without that scale-down.
                       name: "cose",
                       animate: false,
                       idealEdgeLength: 90,
@@ -634,13 +722,19 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
                       fit: true,
                     },
         });
-        // Click — Obsidian-style: highlight the clicked node + its
-        // direct neighbors, dim the rest, fire selection callback.
+
+        // ── Post-mount interaction wiring ─────────────────────────────────
         const cyAny = cy as unknown as {
           elements: () => {
             removeClass: (c: string) => void;
             addClass: (c: string) => void;
           };
+          nodes: (sel?: string) => {
+            forEach: (fn: (node: { data: (k: string) => unknown; addClass: (c: string) => void }) => void) => void;
+            removeClass: (c: string) => void;
+            addClass: (c: string) => void;
+          };
+          edges: () => { removeClass: (c: string) => void };
           getElementById: (id: string) => {
             length: number;
             data: () => Record<string, unknown>;
@@ -656,24 +750,24 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
           maxZoom: (level: number) => void;
           container: () => HTMLElement;
         };
-        // Cap zoom-out so cose's dispersion never crushes labels into
-        // dots. Cap zoom-in for trackpad-pinch sanity.
-        cyAny.minZoom(0.3);
+
+        cyAny.minZoom(0.25);
         cyAny.maxZoom(2.5);
-        cyAny.fit(undefined, 60);
-        // If cose pushed the zoom below 0.6, scale back up so labels
-        // are readable. Trades graph-area-coverage for legibility.
+        cyAny.fit(undefined, 70);
         const z = cyAny.zoom();
-        if (z < 0.6) cyAny.zoom(0.6);
-        // Pointer cursor over nodes signals interactivity.
+        if (z < 0.5) cyAny.zoom(0.5);
+
         try {
           cyAny.container().style.cursor = "default";
-        } catch {
-          /* no-op when container() returns nothing in a teardown race */
-        }
+        } catch { /* no-op */ }
+
         const clearHighlights = () => {
-          cyAny.elements().removeClass("dimmed highlighted neighbor");
+          try {
+            cyAny.elements().removeClass("dimmed highlighted neighbor");
+          } catch { /* no-op */ }
         };
+
+        // Node tap — highlight neighborhood + fire selection
         cy.on("tap", "node", (e) => {
           const evtTarget = (e as unknown as {
             target: {
@@ -687,27 +781,22 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
             };
           }).target;
           const nodeData = evtTarget.data();
-          // Fire selection FIRST so the panel always opens — the
-          // highlight pass below is purely cosmetic and must never
-          // block the user-visible feedback if cytoscape throws.
           handleNodeTapRef.current(nodeData);
           try {
-            const nodeId = evtTarget.id();
             cyAny.elements().removeClass("dimmed highlighted neighbor");
             cyAny.elements().addClass("dimmed");
             const neighborhood = evtTarget.closedNeighborhood();
             neighborhood.removeClass("dimmed");
             neighborhood.addClass("neighbor");
             neighborhood.edges().addClass("highlighted");
-            const ele = cyAny.getElementById(nodeId);
+            const ele = cyAny.getElementById(evtTarget.id());
             if (ele.length > 0) {
               ele.closedNeighborhood().removeClass("dimmed");
             }
-          } catch {
-            /* highlight is best-effort — never block selection on it */
-          }
+          } catch { /* highlight is best-effort */ }
         });
-        // Background tap clears the selection + highlights.
+
+        // Background tap — clear selection
         cy.on("tap", (e) => {
           const evtTarget = (e as unknown as { target: unknown }).target;
           if (evtTarget === cy) {
@@ -715,32 +804,23 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
             handleNodeTapRef.current({});
           }
         });
-        // Double-tap on a node — skip the panel and navigate straight
-        // to the wiki tab with that page selected. Operators who know
-        // what they want shouldn't need a two-click flow.
+
+        // Double-tap — navigate straight to wiki tab
         cy.on("dbltap", "node", (e) => {
           const data = (
             e as unknown as { target: { data: () => Record<string, unknown> } }
           ).target.data();
           handleNodeDoubleTapRef.current(data);
         });
-        // Hover affordance — pointer cursor flips on, the node grows
-        // 1.15x so the click target is visually obvious. Restored on
-        // mouseout.
+
+        // Hover cursor feedback
         cy.on("mouseover", "node", () => {
-          try {
-            cyAny.container().style.cursor = "pointer";
-          } catch {
-            /* no-op */
-          }
+          try { cyAny.container().style.cursor = "pointer"; } catch { /* no-op */ }
         });
         cy.on("mouseout", "node", () => {
-          try {
-            cyAny.container().style.cursor = "default";
-          } catch {
-            /* no-op */
-          }
+          try { cyAny.container().style.cursor = "default"; } catch { /* no-op */ }
         });
+
         cyRef.current = cy;
         setCytoscapeReady(true);
       } catch (err) {
@@ -752,23 +832,13 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
 
     return () => {
       alive = false;
-      try {
-        if (cy) cy.destroy();
-      } catch {
-        /* destroy is best-effort */
-      }
+      try { if (cy) cy.destroy(); } catch { /* destroy is best-effort */ }
       cyRef.current = null;
     };
-    // ``handleNodeTapRef`` intentionally absent — the ref's `.current`
-    // is updated above so cytoscape always sees the latest closure
-    // without needing to remount.
+    // handleNodeTapRef intentionally absent — ref.current updated above.
   }, [elements, layout]);
 
-  // When the side panel opens or closes, the canvas flex-1 column
-  // changes width. Cytoscape's internal canvas does NOT auto-resize on
-  // container reflow — without this, the graph gets clipped or the
-  // panel sits behind a stale-sized canvas. Schedule on next frame so
-  // the DOM has settled before we measure.
+  // Resize canvas when panel opens/closes
   useEffect(() => {
     const handle = window.requestAnimationFrame(() => {
       const cy = cyRef.current as
@@ -777,98 +847,36 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
       if (!cy) return;
       try {
         cy.resize();
-        cy.fit(undefined, 60);
-      } catch {
-        /* no-op — cytoscape may have torn down between schedule + fire */
-      }
+        cy.fit(undefined, 70);
+      } catch { /* no-op */ }
     });
     return () => window.cancelAnimationFrame(handle);
   }, [selection !== null]);
 
+  // ── Available kinds for the floating panel ─────────────────────────────────
+  const availableKinds = useMemo<KindFilter[]>(() => {
+    if (!data) return ["all"];
+    const kinds = new Set<KindFilter>(["all"]);
+    for (const n of data.nodes) {
+      if (n.data.kind === "entity") kinds.add("entity");
+      else if (n.data.kind === "wiki") {
+        const pk = n.data.page_kind;
+        if (pk === "topic") kinds.add("topic");
+        if (pk === "decisions") kinds.add("decisions");
+        if (pk === "faq") kinds.add("faq");
+        if (pk === "action_items") kinds.add("action_items");
+      }
+    }
+    return Array.from(kinds);
+  }, [data]);
+
   return (
     <div className="flex h-full flex-col" data-testid="wiki-graph-root">
-      <header className="flex flex-wrap items-center gap-3 border-b border-border bg-card/60 px-5 py-3">
-        <h2 className="text-base font-semibold text-foreground whitespace-nowrap">
-          Wiki graph
-        </h2>
-        <select
-          aria-label="Filter by page kind"
-          value={filters.kind}
-          onChange={(e) =>
-            setFilters((s) => ({ ...s, kind: e.target.value as KindFilter }))
-          }
-          className="rounded-md border border-border bg-background px-2 py-1 text-xs"
-          data-testid="wiki-graph-filter-kind"
-        >
-          <option value="all">All kinds</option>
-          <option value="topic">Topic</option>
-          <option value="entity">Entity</option>
-          <option value="decisions">Decisions</option>
-          <option value="faq">FAQ</option>
-          <option value="action_items">Action items</option>
-        </select>
-        <select
-          aria-label="Filter by last touched"
-          value={filters.touchedWithin}
-          onChange={(e) =>
-            setFilters((s) => ({
-              ...s,
-              touchedWithin: e.target.value as WindowFilter,
-            }))
-          }
-          className="rounded-md border border-border bg-background px-2 py-1 text-xs"
-        >
-          <option value="all">Any time</option>
-          <option value="1h">Last hour</option>
-          <option value="24h">Last 24h</option>
-          <option value="7d">Last 7d</option>
-        </select>
-        <label className="flex items-center gap-2 text-xs text-muted-foreground whitespace-nowrap">
-          Citation density ≥
-          <input
-            aria-label="Minimum citation density"
-            type="number"
-            min={0}
-            max={20}
-            value={filters.minCitations}
-            onChange={(e) =>
-              setFilters((s) => ({
-                ...s,
-                minCitations: Number.isNaN(parseInt(e.target.value, 10))
-                  ? 0
-                  : parseInt(e.target.value, 10),
-              }))
-            }
-            className="w-16 rounded-md border border-border bg-background px-2 py-1 text-xs"
-          />
-        </label>
-        <select
-          aria-label="Graph layout"
-          value={layout}
-          onChange={(e) => setLayout(e.target.value as LayoutKey)}
-          className="rounded-md border border-border bg-background px-2 py-1 text-xs"
-        >
-          <option value="concentric">Concentric (hub-first)</option>
-          <option value="dagre">Dagre (top-down)</option>
-          <option value="cose">Cose (force-directed)</option>
-          <option value="grid">Grid</option>
-        </select>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="rounded-md border border-border bg-background px-2 py-1 text-xs hover:bg-muted whitespace-nowrap"
-        >
-          Refresh
-        </button>
-        <Legend />
-      </header>
+      {/* No top filter strip — filters live in the floating left panel. */}
 
       <div className="relative flex flex-1 min-h-0 overflow-hidden">
-        {/* ``min-w-0`` so the flex item can shrink past the cytoscape
-            internal canvas's intrinsic width when the panel opens.
-            Without it, the canvas pins the flex parent at its content
-            size and pushes the panel off-screen to the right. */}
-        <div className="relative flex-1 min-w-0 overflow-hidden bg-muted/10">
+        {/* Canvas */}
+        <div className="relative flex-1 min-w-0 overflow-hidden bg-slate-950/60">
           {error && (
             <div
               className="absolute inset-0 flex items-center justify-center text-sm text-red-500"
@@ -902,6 +910,7 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
           />
         </div>
 
+        {/* Detail panel */}
         {selection && (
           <WikiGraphPanel
             channelId={channelId}
@@ -909,11 +918,271 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
             onClose={() => setSelection(null)}
           />
         )}
+
+        {/* ── Floating filter panel (left) ──────────────────────────── */}
+        <div className="absolute left-3 top-1/2 -translate-y-1/2 z-20">
+          {!filtersOpen ? (
+            // Collapsed pill
+            <button
+              type="button"
+              onClick={() => setFiltersOpen(true)}
+              className={cn(
+                "flex flex-col items-center gap-1.5 rounded-xl border border-border/60",
+                "bg-card/85 backdrop-blur-sm px-2 py-3 shadow-sm",
+                "text-muted-foreground hover:text-foreground hover:bg-card transition-colors",
+              )}
+              aria-label="Open graph filters"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              <span
+                className="text-[9px] font-medium tracking-wider uppercase text-muted-foreground/70"
+                style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+              >
+                Filters
+              </span>
+              {(filters.kind !== "all" || searchQuery) && (
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[8px] font-bold text-primary-foreground leading-none">
+                  !
+                </span>
+              )}
+            </button>
+          ) : (
+            // Expanded panel
+            <div
+              className={cn(
+                "flex flex-col gap-2.5 rounded-xl border border-border/60",
+                "bg-card/95 backdrop-blur-sm shadow-lg p-3 w-[172px]",
+              )}
+            >
+              {/* Header row */}
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  <SlidersHorizontal className="w-3 h-3" />
+                  Filters
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setFiltersOpen(false)}
+                  className="text-muted-foreground/50 hover:text-foreground transition-colors"
+                  aria-label="Close filters"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Search box */}
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground/50 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search pages…"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className={cn(
+                    "w-full rounded-lg border border-border/50 bg-background/60 pl-6 pr-2 py-1",
+                    "text-[11px] text-foreground placeholder:text-muted-foreground/50",
+                    "focus:outline-none focus:border-border focus:bg-background",
+                    "transition-colors",
+                  )}
+                  aria-label="Search wiki pages"
+                />
+              </div>
+
+              <div className="border-t border-border/30" />
+
+              {/* Kind filter */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-0.5">
+                  Kind
+                </span>
+                {/* Hidden select preserves the data-testid contract for tests */}
+                <select
+                  aria-label="Filter by page kind"
+                  value={filters.kind}
+                  onChange={(e) => {
+                    setFilters((s) => ({ ...s, kind: e.target.value as KindFilter }));
+                  }}
+                  className="sr-only"
+                  data-testid="wiki-graph-filter-kind"
+                >
+                  <option value="all">All kinds</option>
+                  <option value="topic">Topic</option>
+                  <option value="entity">Entity</option>
+                  <option value="decisions">Decisions</option>
+                  <option value="faq">FAQ</option>
+                  <option value="action_items">Action items</option>
+                </select>
+                {/* Visual kind buttons */}
+                {(["all", "topic", "entity", "decisions", "faq", "action_items"] as KindFilter[])
+                  .filter((k) => k === "all" || availableKinds.includes(k))
+                  .map((k) => {
+                    const active = filters.kind === k;
+                    const kindColorMap: Record<string, string> = {
+                      all: "#94a3b8",
+                      topic: KIND_META.wiki_topic.color,
+                      entity: KIND_META.entity.color,
+                      decisions: KIND_META.wiki_decisions.color,
+                      faq: KIND_META.wiki_faq.color,
+                      action_items: KIND_META.wiki_action_items.color,
+                    };
+                    const kindLabelMap: Record<string, string> = {
+                      all: "All kinds",
+                      topic: "Topics",
+                      entity: "Entities",
+                      decisions: "Decisions",
+                      faq: "FAQ",
+                      action_items: "Actions",
+                    };
+                    return (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => setFilters((s) => ({ ...s, kind: k }))}
+                        className={cn(
+                          "inline-flex items-center gap-2 px-2 py-1 rounded-lg text-[11px] font-medium border transition-colors w-full text-left",
+                          active
+                            ? "border-border/70 text-foreground bg-muted"
+                            : "border-border/40 text-muted-foreground/60 bg-transparent hover:border-border hover:text-foreground",
+                        )}
+                      >
+                        <span
+                          className="w-1.5 h-1.5 rounded-full shrink-0 transition-colors"
+                          style={{ backgroundColor: active ? kindColorMap[k] : undefined }}
+                        />
+                        {kindLabelMap[k]}
+                      </button>
+                    );
+                  })}
+              </div>
+
+              <div className="border-t border-border/30" />
+
+              {/* Time window */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-0.5">
+                  Updated
+                </span>
+                {(["all", "1h", "24h", "7d"] as WindowFilter[]).map((w) => {
+                  const active = filters.touchedWithin === w;
+                  const labelMap = { all: "Any time", "1h": "Last hour", "24h": "Last 24h", "7d": "Last 7d" };
+                  return (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => setFilters((s) => ({ ...s, touchedWithin: w }))}
+                      className={cn(
+                        "inline-flex items-center gap-2 px-2 py-1 rounded-lg text-[11px] font-medium border transition-colors w-full text-left",
+                        active
+                          ? "border-border/70 text-foreground bg-muted"
+                          : "border-border/40 text-muted-foreground/60 bg-transparent hover:border-border hover:text-foreground",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full shrink-0 transition-colors",
+                          active ? "bg-muted-foreground" : "bg-transparent",
+                        )}
+                      />
+                      {labelMap[w]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="border-t border-border/30" />
+
+              {/* Citation density */}
+              <div className="flex flex-col gap-1.5">
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/50">
+                  Min citations: {filters.minCitations}
+                </span>
+                <input
+                  aria-label="Minimum citation density"
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={1}
+                  value={filters.minCitations}
+                  onChange={(e) =>
+                    setFilters((s) => ({
+                      ...s,
+                      minCitations: parseInt(e.target.value, 10),
+                    }))
+                  }
+                  className="w-full accent-primary h-1 rounded-full"
+                />
+              </div>
+
+              <div className="border-t border-border/30" />
+
+              {/* Layout switcher */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/50 mb-0.5">
+                  Layout
+                </span>
+                {(["fcose", "dagre", "cose", "grid"] as LayoutKey[]).map((l) => {
+                  const active = layout === l;
+                  const labelMap: Record<LayoutKey, string> = {
+                    fcose: "Clusters",
+                    dagre: "Top-down",
+                    cose: "Force",
+                    grid: "Grid",
+                  };
+                  return (
+                    <button
+                      key={l}
+                      type="button"
+                      onClick={() => setLayout(l)}
+                      className={cn(
+                        "inline-flex items-center gap-2 px-2 py-1 rounded-lg text-[11px] font-medium border transition-colors w-full text-left",
+                        active
+                          ? "border-border/70 text-foreground bg-muted"
+                          : "border-border/40 text-muted-foreground/60 bg-transparent hover:border-border hover:text-foreground",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full shrink-0",
+                          active ? "bg-primary" : "bg-transparent",
+                        )}
+                      />
+                      {labelMap[l]}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="border-t border-border/30" />
+
+              {/* Refresh */}
+              <button
+                type="button"
+                onClick={() => refetch()}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border/50 bg-background/50 px-2 py-1.5 text-[11px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+              >
+                Refresh graph
+              </button>
+            </div>
+          )}
+        </div>
+        {/* ── End floating filter panel ─────────────────────────────── */}
+
+        {/* ── Legend (bottom-right overlay) ────────────────────────── */}
+        <div className="absolute bottom-8 right-4 z-10">
+          <Legend />
+        </div>
       </div>
 
-      <footer className="flex items-center justify-between border-t border-border bg-card/60 px-5 py-2 text-xs text-muted-foreground">
+      {/* Footer */}
+      <footer className="flex items-center justify-between border-t border-border bg-card/60 px-5 py-2 text-xs text-muted-foreground shrink-0">
         <span>
           {filtered?.nodes.length ?? 0} nodes · {filtered?.edges.length ?? 0} edges
+          {searchQuery && (
+            <>
+              {" · "}
+              <span className="text-amber-400">searching "{searchQuery}"</span>
+            </>
+          )}
           {selection && (
             <>
               {" · "}
@@ -927,22 +1196,25 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
   );
 }
 
+// ─── Legend ───────────────────────────────────────────────────────────────────
+
 function Legend() {
   const items: Array<{ color: string; label: string }> = [
-    { color: KIND_COLORS.channel, label: "Channel hub" },
-    { color: KIND_COLORS.wiki_overview, label: "Overview" },
-    { color: KIND_COLORS.wiki_topic, label: "Topic" },
-    { color: KIND_COLORS.wiki_subtopic, label: "Sub-topic" },
-    { color: KIND_COLORS.wiki_decisions, label: "Decisions" },
-    { color: KIND_COLORS.wiki_faq, label: "FAQ" },
-    { color: KIND_COLORS.entity, label: "Entity" },
+    { color: KIND_META.channel.color, label: "Hub" },
+    { color: KIND_META.wiki_overview.color, label: "Overview" },
+    { color: KIND_META.wiki_topic.color, label: "Topic" },
+    { color: KIND_META.wiki_subtopic.color, label: "Sub-topic" },
+    { color: KIND_META.wiki_decisions.color, label: "Decisions" },
+    { color: KIND_META.wiki_faq.color, label: "FAQ" },
+    { color: KIND_META.wiki_action_items.color, label: "Actions" },
+    { color: KIND_META.entity.color, label: "Entity" },
   ];
   return (
-    <div className="ml-auto flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+    <div className="flex flex-col gap-1 rounded-xl border border-border/40 bg-card/80 backdrop-blur-sm px-3 py-2">
       {items.map((item) => (
-        <span key={item.label} className="inline-flex items-center gap-1">
+        <span key={item.label} className="inline-flex items-center gap-1.5 text-[10px] text-muted-foreground">
           <span
-            className="inline-block h-2.5 w-2.5 rounded-full"
+            className="inline-block h-2 w-2 rounded-sm shrink-0"
             style={{ backgroundColor: item.color }}
           />
           {item.label}
@@ -952,6 +1224,8 @@ function Legend() {
   );
 }
 
+// ─── WikiGraphPanel ───────────────────────────────────────────────────────────
+
 interface WikiGraphPanelProps {
   channelId?: string;
   selection: WikiGraphSelectionData;
@@ -960,10 +1234,6 @@ interface WikiGraphPanelProps {
 
 function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) {
   const navigate = useNavigate();
-  // Fetch the full page content when a wiki node is selected so the
-  // panel renders the actual markdown — operators don't have to click
-  // through to read it. Channel hub + entities don't have backing
-  // wiki pages, so they get the lightweight summary view below.
   const wantsPageFetch = !selection.isChannel && !selection.isEntity && !!selection.pageId;
   const {
     data: page,
@@ -974,17 +1244,11 @@ function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) 
   );
   const goToWikiPage = () => {
     if (!channelId || !selection.pageId) return;
-    // Navigate to the channel wiki tab with the selected page in the
-    // query param. WikiTab consumes ``?page={pageId}`` and points
-    // ``activePageId`` at it on mount.
     navigate(
       `/channels/${channelId}/wiki?page=${encodeURIComponent(selection.pageId)}`,
     );
   };
 
-  // The panel widens when a full page renders so long-form markdown
-  // doesn't wrap awkwardly. Channel hub / entity / brief preview keep
-  // the narrow 320px form.
   const wide = wantsPageFetch && (page || isPageLoading);
   const widthClass = wide ? "w-[28rem] lg:w-[34rem]" : "w-80";
 
@@ -1049,12 +1313,6 @@ function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) 
           </div>
         </div>
 
-        {/* Full page render. Previously wrapped in
-            ``transition-opacity ${isRevalidating ? "opacity-60" : "opacity-100"}``
-            but ``isRevalidating`` flips on every poll regardless of
-            whether content changed, so the wrapper produced a periodic
-            flash. The ``last_updated`` guard in ``useWikiPage`` already
-            prevents content tearing — render directly. */}
         {wantsPageFetch && (
           <div data-testid="wiki-graph-panel-content">
             {isPageLoading && (
@@ -1085,7 +1343,6 @@ function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) 
           </div>
         )}
 
-        {/* Channel hub + entities — show summary only. */}
         {!wantsPageFetch && selection.summary && (
           <p className="text-sm text-foreground/80 leading-relaxed">
             {selection.summary}
