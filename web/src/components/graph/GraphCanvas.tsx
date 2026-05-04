@@ -1,7 +1,8 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import cytoscape, { type Core, type ElementDefinition } from "cytoscape";
 import type { GraphEntity, GraphRelationship } from "@/hooks/useGraph";
 import { getTypeColors } from "./GraphFilters";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 
 interface GraphCanvasProps {
   entities: GraphEntity[];
@@ -23,6 +24,14 @@ export function GraphCanvas({
 }: GraphCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+
+  // Names of entities filtered out because they have no edges in the
+  // visible graph. Surfaced as a small "N unconnected" pill in the
+  // corner so the operator can hover to see the list. Hiding them
+  // from the canvas removes the "horizontal noise line" the user
+  // reported — Cytoscape's cose was placing 0-degree nodes in a row
+  // along the top because they had no spring forces to position them.
+  const [orphanNames, setOrphanNames] = useState<string[]>([]);
 
   // Keep a stable ref to the latest onSelectEntity to avoid stale closures
   // in cytoscape event handlers (the main useEffect doesn't include
@@ -52,10 +61,24 @@ export function GraphCanvas({
       }
     });
 
-    // Check if we have cached positions for these nodes
-    const hasCachedPositions = filtered.some((e) => positionCache.has(e.id));
+    // Split into connected vs isolated. Cytoscape's cose places
+    // 0-degree nodes wherever it has free space (typically the canvas
+    // edge), which produced the "horizontal noise line" the user
+    // reported. Drop isolated nodes from the visible graph and surface
+    // their count as a small overlay pill so the information isn't
+    // lost.
+    const connectedFiltered = filtered.filter(
+      (e) => (connectionCount.get(e.id) ?? 0) > 0,
+    );
+    const isolatedNames = filtered
+      .filter((e) => (connectionCount.get(e.id) ?? 0) === 0)
+      .map((e) => e.name);
+    setOrphanNames(isolatedNames);
 
-    const nodes: ElementDefinition[] = filtered.map((e) => {
+    // Check if we have cached positions for these nodes
+    const hasCachedPositions = connectedFiltered.some((e) => positionCache.has(e.id));
+
+    const nodes: ElementDefinition[] = connectedFiltered.map((e) => {
       const colors = getTypeColors(e.type);
       const conns = connectionCount.get(e.id) ?? 0;
       const size = Math.min(116, 58 + conns * 9);
@@ -74,10 +97,6 @@ export function GraphCanvas({
           hasMedia: !!visualDesc,
           visualDesc: visualDesc || "",
           pending: isPending,
-          // Obsidian-style: nodes with no edges drift to the periphery
-          // and read as visually quieter (smaller font, lower opacity)
-          // so the connected core remains the visual anchor.
-          isolated: conns === 0,
         },
         ...(cached ? { position: cached } : {}),
       };
@@ -170,16 +189,6 @@ export function GraphCanvas({
           style: { opacity: 0.35 },
         },
         {
-          // Disconnected nodes drift to the periphery with low gravity;
-          // fade them so the connected core stays the visual anchor.
-          // Mirrors how Obsidian de-emphasizes orphan notes.
-          selector: "node[?isolated]",
-          style: {
-            opacity: 0.5,
-            "font-size": "9px",
-          } as unknown as cytoscape.Css.Node,
-        },
-        {
           // One-hop-out neighborhood — amber rim. Matches the
           // ``WikiGraph`` highlight pattern for visual consistency.
           selector: "node.neighbor",
@@ -248,16 +257,20 @@ export function GraphCanvas({
             //   • ``animate: 'end'`` gives a 600ms settle-into-place
             //     reveal on first load (the eye tracks the motion and
             //     understands the structure better than a hard pop).
+            // Tightened second-pass tuning after orphan nodes were
+            // filtered out. With only the connected core in play, much
+            // higher nodeRepulsion + lower gravity gives the open
+            // Obsidian-like radial drift.
             name: "cose",
             animate: "end",
-            animationDuration: 600,
+            animationDuration: 700,
             animationEasing: "ease-out-cubic" as cytoscape.Css.TransitionTimingFunction,
-            randomize: false,
+            randomize: true,
             nodeDimensionsIncludeLabels: true,
-            nodeRepulsion: () => 80000,
-            idealEdgeLength: () => 180,
-            edgeElasticity: () => 50,
-            gravity: 0.15,
+            nodeRepulsion: () => 200000,
+            idealEdgeLength: () => 220,
+            edgeElasticity: () => 40,
+            gravity: 0.05,
             padding: 80,
             fit: true,
           } as cytoscape.LayoutOptions,
@@ -491,9 +504,31 @@ export function GraphCanvas({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 min-h-0 bg-muted/5 overflow-hidden"
-    />
+    <div className="relative flex-1 min-h-0 bg-muted/5 overflow-hidden">
+      <div ref={containerRef} className="absolute inset-0" />
+      {orphanNames.length > 0 && (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className="absolute top-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border/60 bg-card/80 px-2.5 py-1 text-[11px] font-medium text-muted-foreground backdrop-blur-sm hover:bg-card hover:text-foreground transition-colors"
+                aria-label={`${orphanNames.length} unconnected entities hidden — hover to view`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/50" />
+                {orphanNames.length} unconnected
+              </button>
+            }
+          />
+          <TooltipContent side="bottom" className="text-xs max-w-xs">
+            <div className="font-medium mb-1">Hidden — no edges in graph</div>
+            <div className="text-muted-foreground/90 leading-relaxed">
+              {orphanNames.slice(0, 12).join(", ")}
+              {orphanNames.length > 12 && ` … +${orphanNames.length - 12} more`}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
   );
 }
