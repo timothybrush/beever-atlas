@@ -4157,20 +4157,52 @@ class WikiCompiler:
             }
             for c in children_pages
         ]
-        # Aggregate entities across children's citations (best-effort).
+        # Aggregate entity-like signals from children's citations.
+        # WikiCitation doesn't carry structured entities, but the
+        # citation's ``author`` and ``media_name`` are reliable
+        # entity-shaped strings the planner prompt can use as hints.
+        # We dedupe and cap at 10 — pure best-effort enrichment.
         entities: list[str] = []
-        seen_entities: set[str] = set()
+        seen: set[str] = set()
         for c in children_pages:
-            for cit in (c.citations or [])[:3]:
-                # Citations don't directly carry entities; skip — top
-                # facts/entities aggregation is a future enhancement.
-                _ = cit
+            for cit in (c.citations or []):
+                for candidate in (cit.author, cit.media_name):
+                    if not candidate:
+                        continue
+                    key = candidate.strip().lower()
+                    if not key or key in seen:
+                        continue
+                    seen.add(key)
+                    entities.append(candidate.strip())
+                    if len(entities) >= 10:
+                        break
+                if len(entities) >= 10:
+                    break
+            if len(entities) >= 10:
+                break
+        # Top facts: pull each child's first 1-2 citations as fact-shaped
+        # dicts the prompt can quote. Real fact_type / quality_score
+        # require a deeper data path; this gives the LLM concrete
+        # material to work with rather than synthesizing from summaries
+        # alone.
+        top_facts: list[dict[str, Any]] = []
+        for c in children_pages:
+            for cit in (c.citations or [])[:1]:
+                top_facts.append(
+                    {
+                        "memory_text": cit.text_excerpt or "",
+                        "author_name": cit.author or "",
+                        "fact_type": "",
+                    }
+                )
+            if len(top_facts) >= 5:
+                break
 
         prompt = build_folder_index_prompt(
             folder_title=folder_title,
             children=children_for_prompt,
             aggregated_entities=entities,
-            top_facts=[],
+            top_facts=top_facts,
         )
 
         try:

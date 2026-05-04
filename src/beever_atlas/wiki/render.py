@@ -207,4 +207,11 @@ def _strip_marker_line(content: str) -> str:
     return "\n".join(out)
 
 
-__all__ = ["render_key_facts_table", "escape_gfm_cell"]
+__all__ = [
+    "render_key_facts_table",
+    "escape_gfm_cell",
+    # llm-wiki-folder-structure exports
+    "render_children_toc",
+    "apply_children_toc_marker",
+    "CHILDREN_TOC_MARKER",
+]

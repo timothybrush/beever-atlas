@@ -124,12 +124,19 @@ class WikiStructurePlanner:
         clusters: list[dict[str, Any]],
         fact_graph: list[tuple[str, str]] | None = None,
     ) -> PlannedStructure:
-        """Sync entry point — preserved so existing tests keep working.
+        """Sync entry point — for sync test fixtures only.
 
-        Wraps the async pipeline via ``asyncio.run`` when called from
-        sync code AND the injected LLM is sync. Async callers that
-        already have an event loop should use ``plan_async`` directly
-        to avoid event-loop nesting issues.
+        DEPRECATED for production code. The production caller (WikiBuilder)
+        uses ``plan_async`` directly because it already runs inside the
+        regenerate's event loop. The sync wrapper exists only so the
+        existing ``test_planner.py`` suite (which uses sync lambdas as
+        the LLM callable) keeps working without async test boilerplate.
+
+        Calling this from sync code that ALREADY runs inside an event
+        loop dispatches to a fresh thread + new loop, which CANNOT
+        share connection pools or async context with the original
+        loop. If you need the planner from production code, use
+        ``plan_async`` instead.
         """
         coro = self.plan_async(
             channel_summary=channel_summary,

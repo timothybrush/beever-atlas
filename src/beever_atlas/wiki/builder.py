@@ -224,12 +224,27 @@ class WikiBuilder:
 
                 _settings2 = _gs2()
                 if _settings2.wiki_folder_planner or force_restructure:
+                    # CRITICAL: send PAGE SLUGS (not cluster UUIDs) as
+                    # the planner's cluster ids. The planner output's
+                    # ``child_slugs`` must round-trip through the
+                    # ``leaves_by_slug`` dict below — and that dict is
+                    # keyed by ``page.slug`` (the slugified title), not
+                    # the cluster UUID. Sending the page slug as the
+                    # planner identifier ensures the LLM's response
+                    # references real page slugs the consumer can
+                    # resolve. The cluster UUID is opaque to the LLM
+                    # anyway; the slug is the human-meaningful handle.
+                    from beever_atlas.wiki.compiler import _slugify
+
                     cluster_dicts: list[dict] = []
                     for c in clusters:
+                        c_id = getattr(c, "id", "") or ""
+                        c_title = getattr(c, "title", "") or ""
+                        page_slug = _slugify(c_title) or c_id
                         cluster_dicts.append(
                             {
-                                "id": getattr(c, "id", "") or "",
-                                "title": getattr(c, "title", "") or "",
+                                "id": page_slug,
+                                "title": c_title,
                                 "summary": getattr(c, "summary", "") or "",
                                 "member_count": getattr(c, "member_count", 0) or 0,
                                 "key_entities": [
