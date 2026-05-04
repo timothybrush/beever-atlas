@@ -77,11 +77,30 @@ def _host_matches(host: str, entry: str) -> bool:
 def _active_allowlist(
     override: Iterable[str] | None,
 ) -> frozenset[str]:
+    """Resolve the host allowlist for file-proxy validation.
+
+    Resolution order:
+      1. Explicit ``override`` argument (test injection).
+      2. ``FILE_PROXY_HOST_ALLOWLIST`` env var — FULL REPLACEMENT of
+         the defaults. Use only when you know exactly which hosts you
+         want to permit. Operators who use this MUST include every
+         platform host they need; the platform defaults are not added.
+      3. ``FILE_PROXY_HOST_ALLOWLIST_EXTRA`` env var — ADDITIVE on top
+         of the platform defaults. Recommended for self-hosted
+         Mattermost / Slack / SharePoint deployments where you want to
+         keep the default cloud hosts available *and* whitelist your
+         own server. Comma-separated list of hostnames or
+         ``suffix:.example.com`` entries.
+      4. Hardcoded ``PLATFORM_HOST_ALLOWLIST`` (cloud platform defaults).
+    """
     if override is not None:
         return frozenset(override)
-    env_value = os.environ.get("FILE_PROXY_HOST_ALLOWLIST", "").strip()
-    if env_value:
-        return _parse_env_allowlist(env_value)
+    full_override = os.environ.get("FILE_PROXY_HOST_ALLOWLIST", "").strip()
+    if full_override:
+        return _parse_env_allowlist(full_override)
+    extra_value = os.environ.get("FILE_PROXY_HOST_ALLOWLIST_EXTRA", "").strip()
+    if extra_value:
+        return PLATFORM_HOST_ALLOWLIST | _parse_env_allowlist(extra_value)
     return PLATFORM_HOST_ALLOWLIST
 
 
