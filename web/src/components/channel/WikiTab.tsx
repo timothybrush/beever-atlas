@@ -440,11 +440,10 @@ export function WikiTab() {
 
   // Derive manual mode from the effective channel policy.
   // When maintenance_mode is "auto" the toolbar button is hidden (auto fires on its own).
-  // Default to true (manual) so the button is visible when the policy hasn't loaded yet.
+  // Default to true (manual) so the button is visible when the policy hasn't loaded yet
+  // or when an older backend returns a policy without the wiki sub-tree.
   const { policy: channelPolicy } = useChannelPolicy(channelId);
-  const manualMode = channelPolicy
-    ? channelPolicy.effective.wiki.maintenance_mode !== "auto"
-    : true;
+  const manualMode = channelPolicy?.effective?.wiki?.maintenance_mode !== "auto";
 
   // Version history
   const { data: versions, isLoading: isVersionsLoading, refetch: refetchVersions } = useWikiVersions(channelId);
