@@ -556,21 +556,26 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
               };
             };
           }).target;
-          const nodeId = evtTarget.id();
           const nodeData = evtTarget.data();
-          // Visual highlight pass — same pattern as the entity GraphCanvas.
-          cyAny.elements().removeClass("dimmed highlighted neighbor");
-          cyAny.elements().addClass("dimmed");
-          const neighborhood = evtTarget.closedNeighborhood();
-          neighborhood.removeClass("dimmed");
-          neighborhood.addClass("neighbor");
-          neighborhood.edges().addClass("highlighted");
-          // Mark the clicked node itself with the brighter "highlighted" class.
-          const ele = cyAny.getElementById(nodeId);
-          if (ele.length > 0) {
-            ele.closedNeighborhood().removeClass("dimmed");
-          }
+          // Fire selection FIRST so the panel always opens — the
+          // highlight pass below is purely cosmetic and must never
+          // block the user-visible feedback if cytoscape throws.
           handleNodeTapRef.current(nodeData);
+          try {
+            const nodeId = evtTarget.id();
+            cyAny.elements().removeClass("dimmed highlighted neighbor");
+            cyAny.elements().addClass("dimmed");
+            const neighborhood = evtTarget.closedNeighborhood();
+            neighborhood.removeClass("dimmed");
+            neighborhood.addClass("neighbor");
+            neighborhood.edges().addClass("highlighted");
+            const ele = cyAny.getElementById(nodeId);
+            if (ele.length > 0) {
+              ele.closedNeighborhood().removeClass("dimmed");
+            }
+          } catch {
+            /* highlight is best-effort — never block selection on it */
+          }
         });
         // Background tap clears the selection + highlights.
         cy.on("tap", (e) => {
@@ -628,6 +633,27 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     // is updated above so cytoscape always sees the latest closure
     // without needing to remount.
   }, [elements, layout]);
+
+  // When the side panel opens or closes, the canvas flex-1 column
+  // changes width. Cytoscape's internal canvas does NOT auto-resize on
+  // container reflow — without this, the graph gets clipped or the
+  // panel sits behind a stale-sized canvas. Schedule on next frame so
+  // the DOM has settled before we measure.
+  useEffect(() => {
+    const handle = window.requestAnimationFrame(() => {
+      const cy = cyRef.current as
+        | { resize: () => void; fit: (eles?: unknown, padding?: number) => void }
+        | null;
+      if (!cy) return;
+      try {
+        cy.resize();
+        cy.fit(undefined, 60);
+      } catch {
+        /* no-op — cytoscape may have torn down between schedule + fire */
+      }
+    });
+    return () => window.cancelAnimationFrame(handle);
+  }, [selection !== null]);
 
   return (
     <div className="flex h-full flex-col" data-testid="wiki-graph-root">
@@ -707,8 +733,12 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
         <Legend />
       </header>
 
-      <div className="relative flex flex-1 min-h-0">
-        <div className="relative flex-1 bg-muted/10">
+      <div className="relative flex flex-1 min-h-0 overflow-hidden">
+        {/* ``min-w-0`` so the flex item can shrink past the cytoscape
+            internal canvas's intrinsic width when the panel opens.
+            Without it, the canvas pins the flex parent at its content
+            size and pushes the panel off-screen to the right. */}
+        <div className="relative flex-1 min-w-0 overflow-hidden bg-muted/10">
           {error && (
             <div
               className="absolute inset-0 flex items-center justify-center text-sm text-red-500"
