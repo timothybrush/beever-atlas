@@ -42,6 +42,14 @@ vi.mock("../modules/MarkdownModule", () => ({
     <div data-testid={`module-${module.id}`} data-anchor={module.anchor} />
   ),
 }));
+// ``key_facts`` v2 is a frontend renderer (not markdown-based) — mock
+// it for the same dispatch sentinel so this dispatch test stays
+// focused on the switch contract, not the component's internals.
+vi.mock("../modules/KeyFactsModule", () => ({
+  KeyFactsModule: ({ module }: { module: { id: string; anchor: string } }) => (
+    <div data-testid={`module-${module.id}`} data-anchor={module.anchor} />
+  ),
+}));
 
 import { TopicPage } from "../TopicPage";
 import type { WikiPage } from "@/lib/types";

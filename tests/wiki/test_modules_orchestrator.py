@@ -285,8 +285,12 @@ async def test_orchestrator_falls_back_when_plan_validates_to_empty() -> None:
 @pytest.mark.asyncio
 async def test_orchestrator_attaches_data_payload_for_frontend_dispatcher() -> None:
     """Each module entry MUST carry a ``data`` payload (label,
-    renderer_kind, markdown) so the frontend dispatcher can render
-    module-by-module without re-parsing page.content."""
+    renderer_kind + module-specific fields) so the frontend
+    dispatcher can render module-by-module without re-parsing
+    page.content. ``key_facts`` v2 is a frontend renderer — its
+    payload is a structured ``items`` list, not pre-rendered
+    markdown. The legacy markdown table still ships in the body
+    for the page.content path."""
     llm_response = json.dumps(
         {
             "plan": {"modules": [{"id": "key_facts", "anchor": "kf"}]},
@@ -312,5 +316,12 @@ async def test_orchestrator_attaches_data_payload_for_frontend_dispatcher() -> N
     assert len(out.modules) == 1
     data = out.modules[0].get("data", {})
     assert data.get("label") == "Key Facts"
-    assert data.get("renderer_kind") == "python"
-    assert "Token TTL" in str(data.get("markdown", ""))
+    assert data.get("renderer_kind") == "frontend"
+    items = data.get("items") or []
+    assert isinstance(items, list)
+    assert len(items) >= 1
+    # First-sentence title surfaces from memory_text.
+    assert any("Token TTL" in (it.get("title") or "") for it in items)
+    # Body marker still substitutes the legacy markdown table for
+    # the page.content path so existing rendering continues to work.
+    assert "Token TTL" in out.content

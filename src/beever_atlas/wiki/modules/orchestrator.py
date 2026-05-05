@@ -79,15 +79,21 @@ def _extract_media_for_module(
     render_inputs: dict[str, Any],
     media_pins: list[Any],
 ) -> dict[str, Any]:
-    """Build the structured ``data`` payload for a frontend-only media
-    module. Returns a dict with module-specific keys; the React
-    component reads it directly via ``module.data``.
+    """Build the structured ``data`` payload for a frontend-only module.
+    Returns a dict with module-specific keys; the React component
+    reads it directly via ``module.data``.
+
+    Most branches here build media payloads. Non-media frontend
+    modules (e.g. ``key_facts`` v2) delegate to their own builders so
+    each module's data shape stays close to its renderer.
 
     ``media_pins`` is the planner's ordered pin list (each item has
     ``media_id``, ``fact_id``, ``slot``). ``render_inputs["media"]``
     is the raw list of media records gathered from facts.
 
     Each module gets the slice it owns:
+      - ``key_facts``     → severity-grouped card list (frontend v2)
+      - ``hero_summary``  → tldr + summary + highlight counts
       - ``media_hero``    → one item (the hero candidate)
       - ``media_inline``  → all inline-pinned items + their fact_ids
       - ``media_gallery`` → unpinned image/video items
@@ -95,6 +101,13 @@ def _extract_media_for_module(
       - ``pdf_preview``   → PDF items
       - ``video_embed``   → YouTube/Vimeo/native video items
     """
+    # Non-media frontend modules — delegate to their per-module builder
+    # so each module's data shape stays close to its renderer.
+    if module_id == "key_facts":
+        from beever_atlas.wiki.modules.key_facts import build_key_facts_data
+
+        return build_key_facts_data(render_inputs.get("facts") or [])
+
     media = render_inputs.get("media") or []
     if not isinstance(media, list):
         media = []
@@ -379,17 +392,24 @@ def _fallback_output(title: str, render_inputs: dict[str, Any]) -> "ModularPageO
     """Catastrophic fallback when the LLM call fails or produces
     unparseable output. Renders a single ``key_facts`` module if
     the data is there, otherwise a placeholder line. The page
-    always renders something rather than 404-ing the user."""
+    always renders something rather than 404-ing the user.
+
+    ``key_facts`` is a frontend renderer in v2, so the fallback path
+    builds the structured payload + a markdown table for the legacy
+    page.content body via ``render_key_facts_table`` directly.
+    """
+    from beever_atlas.wiki.modules.key_facts import build_key_facts_data
+    from beever_atlas.wiki.render import render_key_facts_table
+
     plan = ModulePlan(modules=[{"id": "key_facts", "anchor": "key-facts"}])
-    rendered = _render_python_module("key_facts", _per_module_data("key_facts", render_inputs))
+    facts = render_inputs.get("facts") or []
+    rendered = render_key_facts_table(facts) if isinstance(facts, list) else ""
     if rendered:
-        # Attach data payload so the frontend dispatcher can render too.
-        spec = MODULE_CATALOG.get("key_facts")
-        plan.modules[0]["data"] = {
-            "label": spec.label if spec else "Key Facts",
-            "renderer_kind": "python",
-            "markdown": rendered,
-        }
+        # Attach structured data payload so the frontend dispatcher
+        # can render the v2 card list. The markdown body still
+        # carries the legacy table so older readers + the page.content
+        # cache see something readable.
+        plan.modules[0]["data"] = build_key_facts_data(facts)
         content = f"**{title}**\n\n{rendered}"
     else:
         content = f"**{title}** — page content temporarily unavailable. Try a regenerate."
@@ -496,14 +516,26 @@ async def compile_topic_page_modular(
             )
         data = _per_module_data(mid, render_inputs)
         rendered = _render_python_module(mid, data)
+        # ``key_facts`` is a frontend renderer in v2, but we still
+        # render the legacy markdown table for the body marker so
+        # page.content stays useful for the markdown-render path
+        # (older readers, search index, copy-out). The structured
+        # v2 payload is attached via ``_extract_media_for_module``
+        # for the React dispatcher.
+        if not rendered and mid == "key_facts":
+            from beever_atlas.wiki.render import render_key_facts_table
+
+            facts_for_legacy = render_inputs.get("facts") or []
+            if isinstance(facts_for_legacy, list):
+                rendered = render_key_facts_table(facts_for_legacy)
         if rendered:
             rendered_modules[mid] = rendered
             rendered_count += 1
         # Attach data payload for the frontend dispatcher. Two paths:
         # python-renderer modules persist their rendered markdown so
         # the dispatcher can render via WikiMarkdown; frontend-only
-        # modules (media) get the structured data their React
-        # component needs (URLs, captions, items list).
+        # modules (media + key_facts v2) get the structured data
+        # their React component needs.
         spec = MODULE_CATALOG.get(mid)
         if spec and spec.renderer_kind == "frontend":
             entry["data"] = _extract_media_for_module(

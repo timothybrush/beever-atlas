@@ -166,9 +166,9 @@ MODULE_CATALOG: dict[str, ModuleSpec] = {
     "key_facts": ModuleSpec(
         id="key_facts",
         label="Key Facts",
-        description="GFM table of the highest-importance, highest-quality facts for the topic with citations.",
+        description="Severity-grouped card list of the highest-importance facts for the topic, rendered as a frontend component (sorted, collapsible, severity-colored).",
         eligible=_has_min_facts(5),
-        renderer_kind="python",
+        renderer_kind="frontend",
     ),
     "decision_log": ModuleSpec(
         id="decision_log",

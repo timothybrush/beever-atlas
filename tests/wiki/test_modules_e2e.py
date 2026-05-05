@@ -345,6 +345,12 @@ async def test_e2e_full_modular_pipeline_renders_all_module_types() -> None:
     # Markdown-emitting modules carry the rendered markdown.
     assert "Adopt JWT" in by_id["decision_log"]["data"]["markdown"]
     assert "renderer_kind" in by_id["decision_log"]["data"]
+    # ``key_facts`` v2 is a frontend renderer — payload is a
+    # structured items list, not markdown.
+    kf = by_id["key_facts"]["data"]
+    assert kf["renderer_kind"] == "frontend"
+    assert isinstance(kf["items"], list)
+    assert len(kf["items"]) >= 1
     # Media modules carry structured payloads, NOT markdown.
     hero = by_id["media_hero"]["data"]
     assert hero["renderer_kind"] == "frontend"
