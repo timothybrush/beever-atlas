@@ -191,8 +191,8 @@ def test_iso_date_extraction() -> None:
 
 
 def test_derive_archetype_picks_decision_when_density_high_and_few_facts() -> None:
-    """Decision archetype when the cluster has ≤8 facts AND
-    decision_density ≥ 0.4 — the page IS the decision."""
+    """Decision archetype when the cluster has ≤16 facts AND
+    decision_density ≥ 0.25 — the page IS the decision."""
     assert (
         _derive_archetype(
             fact_count=2,
@@ -207,12 +207,82 @@ def test_derive_archetype_picks_decision_when_density_high_and_few_facts() -> No
 
 
 def test_derive_archetype_falls_back_to_topic_when_decision_diluted() -> None:
-    """A page with 1 decision among 13 observations stays Topic — the
-    decision belongs in decision_log, not the spotlight banner."""
+    """A page with 1 decision among 20 observations stays Topic — the
+    decision belongs in decision_log, not the spotlight banner. The
+    fact_count cap (>16) is what blocks this scenario; the decision
+    density (1/20 = 0.05) would also fail the ≥0.25 floor on its own."""
     assert (
         _derive_archetype(
-            fact_count=13,
+            fact_count=20,
             decision_count=1,
+            tension_count=0,
+            person_fact_count=0,
+            media_count=0,
+            child_count=0,
+        )
+        == "topic"
+    )
+
+
+def test_derive_archetype_decision_for_9_fact_cla_style_page() -> None:
+    """CLA Adoption-style page: 9 facts where 3 are decisions (and the
+    rest are supporting context — alternatives, votes, rationale).
+    This is the canonical case the loosened threshold catches —
+    previously fact_count=9 hit the old ``fc <= 8`` cap and fell back
+    to Topic, burying the decision in ``decision_log``."""
+    assert (
+        _derive_archetype(
+            fact_count=9,
+            decision_count=3,
+            tension_count=0,
+            person_fact_count=0,
+            media_count=0,
+            child_count=0,
+        )
+        == "decision"
+    )
+
+
+def test_derive_archetype_decision_for_15_fact_saas_pricing_style_page() -> None:
+    """SaaS Pricing-style page: 12 facts with 4 decisions. Right at
+    the inclusive ≤16 cap; density 4/12 ≈ 0.33 ≥ 0.25."""
+    assert (
+        _derive_archetype(
+            fact_count=12,
+            decision_count=4,
+            tension_count=0,
+            person_fact_count=0,
+            media_count=0,
+            child_count=0,
+        )
+        == "decision"
+    )
+
+
+def test_derive_archetype_topic_when_above_fact_cap() -> None:
+    """A 17-fact page with even 5 decisions is Topic — wider than
+    "centered on a decision". The cap is the safety net that prevents
+    sprawling pages from claiming Decision archetype."""
+    assert (
+        _derive_archetype(
+            fact_count=17,
+            decision_count=5,
+            tension_count=0,
+            person_fact_count=0,
+            media_count=0,
+            child_count=0,
+        )
+        == "topic"
+    )
+
+
+def test_derive_archetype_topic_when_below_density_floor() -> None:
+    """A 12-fact page with 2 decisions has density 2/12 ≈ 0.17, below
+    the 0.25 floor — Topic, not Decision."""
+    assert (
+        _derive_archetype(
+            fact_count=12,
+            decision_count=2,
             tension_count=0,
             person_fact_count=0,
             media_count=0,

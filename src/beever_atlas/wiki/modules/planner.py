@@ -301,11 +301,16 @@ def compute_signals(
 # is identical between the orchestrator (which feeds it to the prompt)
 # and the validator (which gates module eligibility on it).
 #
-# Decision threshold (``fact_count <= 8 AND decision_density >= 0.4``)
-# is intentionally narrow: pages with many facts of which only one is a
-# decision STAY as Topic — the single decision surfaces via
-# ``decision_log``. Pages CENTERED on a decision (the cluster IS the
-# decision) get the spotlight banner.
+# Decision threshold (``fact_count <= 16 AND decision_density >= 0.25``)
+# was originally tighter (``fc <= 8 AND density >= 0.4``) but missed
+# pages like CLA Adoption (9 facts, 1-3 decisions, rest context) and
+# SaaS Pricing (12 facts, 2-4 decisions). These ARE Decision-archetype
+# pages — they're CENTERED on a decision but include the supporting
+# context that produced the decision (alternatives discussed, votes,
+# rationale). The new threshold catches the "decision + its
+# justification" shape while still excluding sprawling Topic pages
+# where one stray decision surfaces among 20+ unrelated facts (those
+# stay as Topic and the decision shows up in ``decision_log``).
 #
 # Future archetypes (``tension``, ``person``, ``resource``, ``folder``)
 # are placeholders today — their gating signals always evaluate to 0
@@ -338,9 +343,14 @@ def _derive_archetype(
     except (TypeError, ValueError):
         return "topic"
 
-    # Decision: small page (≤8 facts) where the decision IS the
-    # centerpiece (decision_count / fact_count ≥ 0.4).
-    if dc >= 1 and fc <= 8 and (dc / max(fc, 1)) >= 0.4:
+    # Decision: small-to-mid page (≤16 facts) where the decision is
+    # the centerpiece (decision_count / fact_count ≥ 0.25). The
+    # threshold was loosened from (≤8, ≥0.4) to catch CLA-style pages
+    # where 1-3 decisions sit among 6-15 supporting facts; those are
+    # Decision-archetype, not Topic-archetype. Pages above 16 facts
+    # are too broad to be "centered on a decision" — they stay as
+    # Topic and the decision surfaces via ``decision_log``.
+    if dc >= 1 and fc <= 16 and (dc / max(fc, 1)) >= 0.25:
         return "decision"
     # Future archetypes — left as elif placeholders that never fire
     # today (tension_count + person_fact_count are 0 until Phase 3).
