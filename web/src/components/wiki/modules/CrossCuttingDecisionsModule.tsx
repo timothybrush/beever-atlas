@@ -16,6 +16,8 @@
 
 import { ArrowRight } from "lucide-react";
 import type { ModuleProps } from "./ModuleRenderer";
+import { SeverityBadge } from "../SeverityBadge";
+import { truncateAtSentence } from "@/lib/textTruncate";
 
 interface SourcePage {
   title?: string;
@@ -129,13 +131,14 @@ export function CrossCuttingDecisionsModule({
                 className="text-sm font-semibold text-foreground leading-snug"
                 data-testid="cross-cutting-decision-title"
               >
-                {title}
+                {truncateAtSentence(title, 220)}
               </div>
               <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span
-                  className={`inline-flex items-center px-1.5 py-0.5 rounded ${sev.badge} text-[10.5px] uppercase tracking-wider font-semibold`}
+                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${sev.badge} text-[10.5px] uppercase tracking-wider font-semibold`}
                   data-testid="cross-cutting-decision-importance"
                 >
+                  <SeverityBadge severity={importance} iconSize={10} showDot={false} />
                   {importance}
                 </span>
                 {decidedBy && (

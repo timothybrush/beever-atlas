@@ -59,87 +59,181 @@ interface ModuleRendererProps {
   onNavigate?: (pageId: string) => void;
 }
 
+/**
+ * Pull the page-level glossary out of the ``acronym_legend`` module's
+ * ``items`` list so KeyFactsModule (and any other body renderer that
+ * wants to surface inline definitions) can highlight matched terms
+ * without re-fetching anything. The acronym_legend builder already
+ * filters down to terms ACTUALLY mentioned on this page, so this map
+ * is page-scoped — no risk of inflating definitions onto unrelated
+ * acronyms.
+ */
+function extractGlossary(
+  modules: WikiPageModule[],
+): Record<string, string> | undefined {
+  const legend = modules.find((m) => m.id === "acronym_legend");
+  if (!legend) return undefined;
+  const items = (legend.data as { items?: unknown } | undefined)?.items;
+  if (!Array.isArray(items)) return undefined;
+  const out: Record<string, string> = {};
+  for (const raw of items) {
+    if (!raw || typeof raw !== "object") continue;
+    const item = raw as { term?: unknown; definition?: unknown };
+    const term = typeof item.term === "string" ? item.term.trim() : "";
+    const def =
+      typeof item.definition === "string" ? item.definition.trim() : "";
+    if (term && def) out[term] = def;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+// Module IDs that belong in the bottom-of-page "reading aids" footer.
+// They're reference helpers (acronym definitions + source-message
+// drawer), not core spine content, so we visually demote them by
+// wrapping them in a single ``<aside>`` block with subtle top border
+// and lighter background tint.
+const READING_AIDS_IDS = new Set(["acronym_legend", "provenance_drawer"]);
+
+function renderModule(
+  module: WikiPageModule,
+  citations: WikiCitation[],
+  onNavigate: ((pageId: string) => void) | undefined,
+  glossary: Record<string, string> | undefined,
+) {
+  // For modules that support inline glossary highlighting, inject
+  // the page-scoped glossary into ``module.data`` so the renderer
+  // can wrap matched acronyms in title-tooltip spans. Other
+  // modules ignore the extra field.
+  const moduleForRender =
+    glossary && module.id === "key_facts"
+      ? {
+          ...module,
+          data: { ...(module.data ?? {}), glossary },
+        }
+      : module;
+  const props: ModuleProps = {
+    module: moduleForRender,
+    citations,
+    onNavigate,
+  };
+  return dispatchModule(moduleForRender, props);
+}
+
 export function ModuleRenderer({
   modules,
   citations,
   onNavigate,
 }: ModuleRendererProps) {
+  const glossary = extractGlossary(modules);
+  // Split modules into spine (top) + reading aids (bottom). Preserve
+  // original order within each bucket so authors keep control of the
+  // sequence — the footer just visually groups the trailing reference
+  // helpers, it doesn't reshuffle them.
+  const spineModules = modules.filter((m) => !READING_AIDS_IDS.has(m.id));
+  const readingAidsModules = modules.filter((m) => READING_AIDS_IDS.has(m.id));
+  // Keep the canonical reading-aids order: acronym_legend first
+  // (definitions help understand the page body), then provenance
+  // drawer (sources you might want to follow up on).
+  readingAidsModules.sort((a, b) => {
+    if (a.id === b.id) return 0;
+    if (a.id === "acronym_legend") return -1;
+    if (b.id === "acronym_legend") return 1;
+    return 0;
+  });
   return (
     <>
-      {modules.map((module) => {
-        const props: ModuleProps = { module, citations, onNavigate };
-        switch (module.id) {
-          case "hero_summary":
-            return <HeroSummaryModule key={module.anchor} {...props} />;
-          case "key_facts":
-            return <KeyFactsModule key={module.anchor} {...props} />;
-          case "decision_log":
-            return <DecisionLogModule key={module.anchor} {...props} />;
-          case "timeline":
-            return <TimelineModule key={module.anchor} {...props} />;
-          case "comparison_matrix":
-            return <ComparisonMatrixModule key={module.anchor} {...props} />;
-          case "pros_cons":
-            return <ProsConsModule key={module.anchor} {...props} />;
-          case "quote_highlights":
-            return <QuoteHighlightsModule key={module.anchor} {...props} />;
-          case "flow_chart":
-            return <FlowChartModule key={module.anchor} {...props} />;
-          case "entity_diagram":
-            return <EntityDiagramModule key={module.anchor} {...props} />;
-          case "open_questions":
-            return <OpenQuestionsModule key={module.anchor} {...props} />;
-          case "subpage_cards":
-            return <SubpageCardsModule key={module.anchor} {...props} />;
-          case "related_threads":
-            return <RelatedThreadsModule key={module.anchor} {...props} />;
-          // Media modules — frontend-only renderers consume the
-          // structured ``module.data`` payload (URLs, captions,
-          // items list) the orchestrator's ``_extract_media_for_module``
-          // populated. These bypass the markdown path entirely.
-          case "media_hero":
-            return <MediaHeroModule key={module.anchor} {...props} />;
-          case "media_inline":
-            return <MediaInlineModule key={module.anchor} {...props} />;
-          case "media_gallery":
-            return <MediaGalleryModule key={module.anchor} {...props} />;
-          case "link_card":
-            return <LinkCardModule key={module.anchor} {...props} />;
-          case "pdf_preview":
-            return <PdfPreviewModule key={module.anchor} {...props} />;
-          case "video_embed":
-            return <VideoEmbedModule key={module.anchor} {...props} />;
-          // Provenance + reading-aid modules — frontend-only renderers
-          // consume the structured ``module.data`` payload built by the
-          // matching Python builder (provenance_drawer / acronym_legend
-          // / stat_strip). All 3 are content-fullness modules added to
-          // give human readers + LLM agents richer access to the same
-          // source data.
-          case "stat_strip":
-            return <StatStripModule key={module.anchor} {...props} />;
-          case "decision_banner":
-            return <DecisionBannerModule key={module.anchor} {...props} />;
-          case "acronym_legend":
-            return <AcronymLegendModule key={module.anchor} {...props} />;
-          case "provenance_drawer":
-            return <ProvenanceDrawerModule key={module.anchor} {...props} />;
-          // Folder-archetype dashboard modules — replace the legacy
-          // "Themes & threads" prose blob with at-a-glance modules.
-          // Only fire on folder index pages (planner predicates gate
-          // archetype == 'folder').
-          case "folder_stats":
-            return <FolderStatsModule key={module.anchor} {...props} />;
-          case "top_contributors":
-            return <TopContributorsModule key={module.anchor} {...props} />;
-          case "cross_cutting_decisions":
-            return <CrossCuttingDecisionsModule key={module.anchor} {...props} />;
-          default:
-            // Unknown module ID — silently drop. The backend's
-            // validator should have rejected it before persistence;
-            // surfacing a fallback would mask a backend bug.
-            return null;
-        }
-      })}
+      {spineModules.map((module) =>
+        renderModule(module, citations, onNavigate, glossary),
+      )}
+      {readingAidsModules.length > 0 && (
+        <aside
+          className="wiki-page-footer mt-10 pt-6 border-t border-border/60 bg-muted/5 -mx-2 px-2 rounded-b-lg text-[13px] text-muted-foreground"
+          data-testid="wiki-page-footer"
+          data-toc-skip
+        >
+          <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2 inline-flex items-center gap-1.5">
+            <span aria-hidden="true">📚</span>
+            <span>Reading aids</span>
+          </h2>
+          {readingAidsModules.map((module) =>
+            renderModule(module, citations, onNavigate, glossary),
+          )}
+        </aside>
+      )}
     </>
   );
+}
+
+function dispatchModule(module: WikiPageModule, props: ModuleProps) {
+  switch (module.id) {
+    case "hero_summary":
+      return <HeroSummaryModule key={module.anchor} {...props} />;
+    case "key_facts":
+      return <KeyFactsModule key={module.anchor} {...props} />;
+    case "decision_log":
+      return <DecisionLogModule key={module.anchor} {...props} />;
+    case "timeline":
+      return <TimelineModule key={module.anchor} {...props} />;
+    case "comparison_matrix":
+      return <ComparisonMatrixModule key={module.anchor} {...props} />;
+    case "pros_cons":
+      return <ProsConsModule key={module.anchor} {...props} />;
+    case "quote_highlights":
+      return <QuoteHighlightsModule key={module.anchor} {...props} />;
+    case "flow_chart":
+      return <FlowChartModule key={module.anchor} {...props} />;
+    case "entity_diagram":
+      return <EntityDiagramModule key={module.anchor} {...props} />;
+    case "open_questions":
+      return <OpenQuestionsModule key={module.anchor} {...props} />;
+    case "subpage_cards":
+      return <SubpageCardsModule key={module.anchor} {...props} />;
+    case "related_threads":
+      return <RelatedThreadsModule key={module.anchor} {...props} />;
+    // Media modules — frontend-only renderers consume the
+    // structured ``module.data`` payload (URLs, captions, items
+    // list) the orchestrator's ``_extract_media_for_module``
+    // populated. These bypass the markdown path entirely.
+    case "media_hero":
+      return <MediaHeroModule key={module.anchor} {...props} />;
+    case "media_inline":
+      return <MediaInlineModule key={module.anchor} {...props} />;
+    case "media_gallery":
+      return <MediaGalleryModule key={module.anchor} {...props} />;
+    case "link_card":
+      return <LinkCardModule key={module.anchor} {...props} />;
+    case "pdf_preview":
+      return <PdfPreviewModule key={module.anchor} {...props} />;
+    case "video_embed":
+      return <VideoEmbedModule key={module.anchor} {...props} />;
+    // Provenance + reading-aid modules — frontend-only renderers
+    // consume the structured ``module.data`` payload built by the
+    // matching Python builder (provenance_drawer / acronym_legend
+    // / stat_strip). All 3 are content-fullness modules added to
+    // give human readers + LLM agents richer access to the same
+    // source data.
+    case "stat_strip":
+      return <StatStripModule key={module.anchor} {...props} />;
+    case "decision_banner":
+      return <DecisionBannerModule key={module.anchor} {...props} />;
+    case "acronym_legend":
+      return <AcronymLegendModule key={module.anchor} {...props} />;
+    case "provenance_drawer":
+      return <ProvenanceDrawerModule key={module.anchor} {...props} />;
+    // Folder-archetype dashboard modules — replace the legacy
+    // "Themes & threads" prose blob with at-a-glance modules.
+    // Only fire on folder index pages (planner predicates gate
+    // archetype == 'folder').
+    case "folder_stats":
+      return <FolderStatsModule key={module.anchor} {...props} />;
+    case "top_contributors":
+      return <TopContributorsModule key={module.anchor} {...props} />;
+    case "cross_cutting_decisions":
+      return <CrossCuttingDecisionsModule key={module.anchor} {...props} />;
+    default:
+      // Unknown module ID — silently drop. The backend's
+      // validator should have rejected it before persistence;
+      // surfacing a fallback would mask a backend bug.
+      return null;
+  }
 }

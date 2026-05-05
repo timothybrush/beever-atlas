@@ -11,7 +11,6 @@ import {
   Clock,
   Library,
   FileText,
-  File,
 } from "lucide-react";
 import type { WikiPageNode } from "@/lib/types";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
@@ -95,10 +94,18 @@ function SidebarItem({ node, isActive, onClick, indent = 0, displayTitle }: Side
   const shownTitle = displayTitle ?? node.title;
   const isFixed = node.page_type === "fixed";
   const FixedIcon = isFixed ? iconForFixedPage(node) : null;
-  // Loose leaf topics (no children) get a subtle file icon so the eye
-  // can pick them out from folder rows of the same indent. Numbered
-  // section badge stays for semantic anchoring.
-  const showLeafIcon = !isFixed && (node.children?.length ?? 0) === 0;
+  // Sidebar icon dispatch — centralised so folder vs leaf vs fixed
+  // pages render with consistent treatment:
+  //   - fixed pages    → FixedIcon (BookOpen / HelpCircle / etc.)
+  //   - leaf topics    → FileText (consistent file glyph, replaces
+  //                      the prior `File` icon so leaves match the
+  //                      file-icon family fixed pages use)
+  //   - parent topics  → no icon (chevron lives upstream in TreeNode)
+  // Section number renders to the LEFT of the icon (mono / muted)
+  // so the numeric prefix is visually consistent with the body
+  // numbering scheme.
+  const isLeaf = !isFixed && (node.children?.length ?? 0) === 0;
+  const showLeafIcon = isLeaf;
 
   return (
     <Tooltip>
@@ -107,28 +114,38 @@ function SidebarItem({ node, isActive, onClick, indent = 0, displayTitle }: Side
           <button
             onClick={onClick}
             aria-label={fullTitle}
+            aria-current={isActive ? "page" : undefined}
             className={`group/row relative flex items-start gap-1.5 w-full rounded-md py-1.5 pr-2 text-left text-[13px] leading-snug transition-colors ${
               isActive
                 ? "bg-primary/10 text-primary border-l-2 border-primary font-medium"
                 : "text-muted-foreground hover:bg-muted hover:text-foreground"
             }`}
+            data-testid={`sidebar-item-${node.id}`}
+            data-leaf={isLeaf ? "true" : undefined}
+            data-fixed={isFixed ? "true" : undefined}
             style={{ paddingLeft: `${ROW_BASE_PADDING + indent * INDENT_PX}px` }}
           >
-            {FixedIcon ? (
-              <span className="shrink-0 mt-0.5 flex h-4 w-5 items-center justify-center text-muted-foreground/75">
-                <FixedIcon size={14} />
-              </span>
-            ) : showLeafIcon ? (
-              <span className="shrink-0 mt-0.5 flex h-4 w-5 items-center justify-center text-muted-foreground/40">
-                <File size={12} />
-              </span>
-            ) : (
-              <span className="shrink-0 mt-0.5 w-5" aria-hidden="true" />
-            )}
             {!isFixed && node.section_number && (
               <span className="shrink-0 mt-0.5 text-[10.5px] text-muted-foreground/70 font-mono font-semibold tabular-nums">
                 {displaySectionNumber(node.section_number)}
               </span>
+            )}
+            {FixedIcon ? (
+              <span
+                className="shrink-0 mt-0.5 flex h-4 w-5 items-center justify-center text-muted-foreground/75"
+                data-testid="sidebar-icon-fixed"
+              >
+                <FixedIcon size={14} />
+              </span>
+            ) : showLeafIcon ? (
+              <span
+                className="shrink-0 mt-0.5 flex h-4 w-5 items-center justify-center text-muted-foreground/50"
+                data-testid="sidebar-icon-leaf"
+              >
+                <FileText size={12} />
+              </span>
+            ) : (
+              <span className="shrink-0 mt-0.5 w-5" aria-hidden="true" />
             )}
             <span className="flex-1 min-w-0 break-words line-clamp-2">{shownTitle}</span>
             {node.memory_count > 0 && (
@@ -193,6 +210,10 @@ function FolderRow({
             }`}
             style={{ paddingLeft: `${ROW_BASE_PADDING + indent * INDENT_PX}px` }}
             aria-label={fullTitle}
+            aria-current={isActive ? "page" : undefined}
+            data-testid={`sidebar-folder-${node.id}`}
+            data-folder="true"
+            data-expanded={expanded ? "true" : "false"}
           >
             <button
               type="button"

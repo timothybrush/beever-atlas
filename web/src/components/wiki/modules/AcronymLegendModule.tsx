@@ -12,6 +12,7 @@
  */
 
 import type { ModuleProps } from "./ModuleRenderer";
+import { truncateAtSentence } from "@/lib/textTruncate";
 
 interface LegendItem {
   term?: string;
@@ -26,17 +27,10 @@ interface AcronymLegendData {
 
 const DEFINITION_MAX = 120;
 
-/** Truncate definition to ~120 chars at a word boundary. Empty / short
- *  inputs pass through unchanged. */
+/** Truncate definition to ~120 chars, preferring sentence/word
+ *  boundaries via the shared ``truncateAtSentence`` helper. */
 function truncateDefinition(s: string): string {
-  if (!s) return "";
-  if (s.length <= DEFINITION_MAX) return s;
-  const budget = s.slice(0, DEFINITION_MAX);
-  const lastSpace = budget.lastIndexOf(" ");
-  if (lastSpace >= DEFINITION_MAX / 2) {
-    return budget.slice(0, lastSpace).replace(/[ ,;:]$/, "") + "…";
-  }
-  return budget.replace(/\s+$/, "") + "…";
+  return truncateAtSentence(s, DEFINITION_MAX);
 }
 
 export function AcronymLegendModule({ module }: ModuleProps) {

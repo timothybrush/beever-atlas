@@ -278,7 +278,142 @@ describe("KeyFactsModule — URL hyperlinking", () => {
 });
 
 // ---------------------------------------------------------------------------
-// (e) Author chip dedup
+// (e) SeverityBadge integration — every fact row must render a
+//     SeverityBadge (color + icon + aria-label) instead of the prior
+//     color-only dot, so color-blind readers can still tell severity
+//     buckets apart.
+// ---------------------------------------------------------------------------
+
+describe("KeyFactsModule — SeverityBadge a11y", () => {
+  it("renders a SeverityBadge with aria-label per fact row", () => {
+    const items = [
+      makeItem({
+        title: "Critical fact.",
+        importance: "critical",
+        fact_type: "observation",
+      }),
+      makeItem({
+        title: "High fact.",
+        importance: "high",
+        fact_type: "decision",
+      }),
+      makeItem({
+        title: "Medium fact.",
+        importance: "medium",
+        fact_type: "observation",
+      }),
+      makeItem({
+        title: "Low fact.",
+        importance: "low",
+        fact_type: "observation",
+      }),
+    ];
+    render(
+      <KeyFactsModule
+        module={makeModule(items)}
+        citations={[]}
+        onNavigate={noop}
+      />,
+    );
+    const badges = screen.getAllByTestId("severity-badge");
+    // 4 facts → 4 badges.
+    expect(badges.length).toBe(4);
+    const labels = badges.map((b) => b.getAttribute("aria-label"));
+    expect(labels).toContain("Critical importance");
+    expect(labels).toContain("High importance");
+    expect(labels).toContain("Medium importance");
+    expect(labels).toContain("Low importance");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (f) Glossary tooltips — when a glossary is provided in module data,
+//     matching whole words inside fact titles get wrapped in a span
+//     with title="<definition>" + dotted-underline class.
+// ---------------------------------------------------------------------------
+
+describe("KeyFactsModule — glossary tooltips", () => {
+  it("wraps glossary terms in a title-tooltip span", () => {
+    const items = [
+      makeItem({
+        title: "Adopt MFA for the SSO flow.",
+        fact_type: "decision",
+      }),
+    ];
+    const mod = makeModule(items);
+    // Inject a glossary into module data — the renderer reads it
+    // off ``module.data.glossary``.
+    (mod.data as { glossary?: Record<string, string> }).glossary = {
+      MFA: "Multi-Factor Authentication",
+      SSO: "Single Sign-On",
+    };
+    render(
+      <KeyFactsModule
+        module={mod}
+        citations={[]}
+        onNavigate={noop}
+      />,
+    );
+    // Both terms become highlighted spans with the matching title.
+    const mfa = document.querySelector(
+      '[data-glossary-term="MFA"]',
+    ) as HTMLElement | null;
+    expect(mfa).not.toBeNull();
+    expect(mfa?.getAttribute("title")).toBe("Multi-Factor Authentication");
+    const sso = document.querySelector(
+      '[data-glossary-term="SSO"]',
+    ) as HTMLElement | null;
+    expect(sso).not.toBeNull();
+    expect(sso?.getAttribute("title")).toBe("Single Sign-On");
+  });
+
+  it("ignores partial-word matches (whole-word boundaries only)", () => {
+    const items = [
+      // "MFAuthenticator" should NOT highlight "MFA" — it's not a
+      // word boundary match.
+      makeItem({
+        title: "MFAuthenticator was rejected.",
+        fact_type: "decision",
+      }),
+    ];
+    const mod = makeModule(items);
+    (mod.data as { glossary?: Record<string, string> }).glossary = {
+      MFA: "Multi-Factor Authentication",
+    };
+    render(
+      <KeyFactsModule
+        module={mod}
+        citations={[]}
+        onNavigate={noop}
+      />,
+    );
+    expect(
+      document.querySelector('[data-glossary-term="MFA"]'),
+    ).toBeNull();
+  });
+
+  it("renders no tooltips when no glossary is provided", () => {
+    const items = [
+      makeItem({
+        title: "Adopt MFA for SSO.",
+        fact_type: "decision",
+      }),
+    ];
+    render(
+      <KeyFactsModule
+        module={makeModule(items)}
+        citations={[]}
+        onNavigate={noop}
+      />,
+    );
+    expect(
+      document.querySelector("[data-glossary-term]"),
+    ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// (g) Author chip dedup
 // ---------------------------------------------------------------------------
 
 describe("KeyFactsModule — author chip dedup", () => {

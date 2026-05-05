@@ -21,6 +21,8 @@
 
 import { useMemo, useState } from "react";
 import type { ModuleProps } from "./ModuleRenderer";
+import { SeverityBadge } from "../SeverityBadge";
+import { applyGlossaryToNodes, type GlossaryMap } from "@/lib/glossaryHighlight";
 
 // ---------------------------------------------------------------------------
 // Types — mirror the Python builder's output shape exactly.
@@ -45,18 +47,15 @@ interface KeyFactsData {
   renderer_kind?: string;
   items?: KeyFactItem[];
   groups?: string[];
+  /** Optional channel glossary, term → definition. When provided,
+   *  matching whole words inside fact title/body get a dotted
+   *  underline + native ``title`` tooltip via ``applyGlossaryToNodes``. */
+  glossary?: GlossaryMap;
 }
 
 // ---------------------------------------------------------------------------
 // Visual helpers
 // ---------------------------------------------------------------------------
-
-const SEVERITY_DOT_CLASS: Record<Severity, string> = {
-  critical: "bg-red-500",
-  high: "bg-amber-500",
-  medium: "bg-blue-500",
-  low: "bg-muted-foreground/40",
-};
 
 const SEVERITY_BORDER_CLASS: Record<Severity, string> = {
   critical: "border-l-red-500",
@@ -160,13 +159,23 @@ interface FactRowProps {
   /** When true, the per-row author chip is hidden because the parent
    *  group already shows a single "by X (× N)" header. */
   hideAuthor: boolean;
+  /** Optional glossary applied to title/body text — wraps matched
+   *  acronyms in dotted-underline ``<span title=...>`` for inline
+   *  hover-defs. */
+  glossary?: GlossaryMap;
 }
 
-function FactRow({ item, hideAuthor }: FactRowProps) {
+function FactRow({ item, hideAuthor, glossary }: FactRowProps) {
   const [expanded, setExpanded] = useState(false);
   const severity = severityFor(item);
-  const titleLinkified = useMemo(() => linkifyText(item.title), [item.title]);
-  const bodyLinkified = useMemo(() => linkifyText(item.body), [item.body]);
+  const titleLinkified = useMemo(
+    () => applyGlossaryToNodes(linkifyText(item.title), glossary),
+    [item.title, glossary],
+  );
+  const bodyLinkified = useMemo(
+    () => applyGlossaryToNodes(linkifyText(item.body), glossary),
+    [item.body, glossary],
+  );
   const isCritical = severity === "critical";
 
   return (
@@ -184,12 +193,10 @@ function FactRow({ item, hideAuthor }: FactRowProps) {
         className="w-full text-left flex items-start gap-2"
         aria-expanded={expanded}
       >
-        <span
-          className={
-            "mt-1.5 inline-block h-2 w-2 rounded-full flex-shrink-0 " +
-            SEVERITY_DOT_CLASS[severity]
-          }
-          aria-hidden="true"
+        <SeverityBadge
+          severity={severity}
+          iconSize={12}
+          className="mt-1"
         />
         <div className="flex-1 min-w-0">
           <div
@@ -247,9 +254,10 @@ function FactRow({ item, hideAuthor }: FactRowProps) {
 interface GroupSectionProps {
   factType: string;
   items: KeyFactItem[];
+  glossary?: GlossaryMap;
 }
 
-function GroupSection({ factType, items }: GroupSectionProps) {
+function GroupSection({ factType, items, glossary }: GroupSectionProps) {
   const [showAll, setShowAll] = useState(false);
   const total = items.length;
   const visibleCount = showAll ? total : Math.min(3, total);
@@ -303,6 +311,7 @@ function GroupSection({ factType, items }: GroupSectionProps) {
             key={it.fact_id || `${factType}-${idx}`}
             item={it}
             hideAuthor={!!dedupAuthor}
+            glossary={glossary}
           />
         ))}
       </div>
@@ -328,6 +337,10 @@ export function KeyFactsModule({ module }: ModuleProps) {
   const items = Array.isArray(data.items) ? data.items : [];
   const label =
     typeof data.label === "string" && data.label ? data.label : "Key Facts";
+  const glossary =
+    data.glossary && typeof data.glossary === "object"
+      ? (data.glossary as GlossaryMap)
+      : undefined;
 
   // Critical facts promote to a flat strip outside group nesting.
   const critical = items.filter((it) => severityFor(it) === "critical");
@@ -377,6 +390,7 @@ export function KeyFactsModule({ module }: ModuleProps) {
                 key={it.fact_id || `critical-${idx}`}
                 item={it}
                 hideAuthor={false}
+                glossary={glossary}
               />
             ))}
           </div>
@@ -386,6 +400,7 @@ export function KeyFactsModule({ module }: ModuleProps) {
             key={k}
             factType={k}
             items={grouped.get(k) || []}
+            glossary={glossary}
           />
         ))}
       </div>
