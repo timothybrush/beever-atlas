@@ -160,6 +160,20 @@ async def lifespan(app: FastAPI):
     init_llm_provider(settings)
     await _migrate_env_connection(stores, settings)
 
+    # Derive the file-proxy / media-proxy host allowlist from active
+    # PlatformConnection records — e.g. a self-hosted Mattermost on
+    # ``team.example.com`` is auto-allowed once the operator finishes
+    # the connection wizard. Removes the need to also set
+    # ``FILE_PROXY_HOST_ALLOWLIST_EXTRA`` for the same hostname.
+    try:
+        from beever_atlas.infra.platform_hosts import refresh_runtime_proxy_hosts
+
+        await refresh_runtime_proxy_hosts(stores)
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "lifespan: failed to derive proxy hosts from connections (non-fatal)"
+        )
+
     # Start the sync scheduler
     from beever_atlas.services.scheduler import SyncScheduler, init_scheduler
 
