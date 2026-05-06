@@ -490,52 +490,141 @@ interface ParagraphProps {
   citationLookup: Map<string, WikiCitation>;
 }
 
-/** Render the paragraph text with one trailing chip per citation. The
- *  v3 prompt does not embed `[f_xxx]` placeholders inside the text
- *  body — citations live in the structured `paragraph.citations`
- *  array. We render the prose as-is and append the chips at the end
- *  of the paragraph (Wikipedia-footnote style).
+/** Match `[f_xxx]` or `[f_xxx, f_yyy, ...]` inline citation patterns
+ *  the v3 prompt emits inside paragraph text. The regex only matches
+ *  fact-id chains separated by commas — anything outside that shape
+ *  passes through as literal text. */
+const INLINE_CITATION_RE = /\[(f_[a-zA-Z0-9_]+(?:\s*,\s*f_[a-zA-Z0-9_]+)*)\]/g;
+
+/** Render a single citation chip for ``factId``, falling back to the
+ *  dev-only ``[?]`` missing chip when the id is not in the index. */
+function renderChipForFactId(
+  factId: string,
+  factIdIndex: Map<string, number>,
+  citationLookup: Map<string, WikiCitation>,
+  keyHint: string,
+): ReactNode {
+  const displayIndex = factIdIndex.get(factId);
+  if (displayIndex === undefined) {
+    // M-3: silently dropping a missing-fact_id citation hides
+    // upgrade-time data drift. In dev render a dim ``[?]`` chip
+    // with ``data-fact-id`` so authors notice; in prod fall back
+    // to the prior "render nothing" behaviour so users never see
+    // diagnostic UI.
+    if (import.meta.env.DEV) {
+      if (!warnedFactIds.has(factId)) {
+        // eslint-disable-next-line no-console -- dev-only diagnostic
+        console.warn(
+          `[NarrativeArticle] citation references missing fact_id: ${factId}`,
+        );
+        warnedFactIds.add(factId);
+      }
+      return (
+        <span
+          key={keyHint}
+          data-testid="narrative-citation-chip-missing"
+          data-fact-id={factId}
+          title={`Missing fact: ${factId}`}
+          className="inline-flex items-center px-1 py-0.5 mx-0.5 text-[10px] font-medium leading-none rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 cursor-help"
+        >
+          [?]
+        </span>
+      );
+    }
+    return null;
+  }
+  return (
+    <CitationChip
+      key={keyHint}
+      factId={factId}
+      displayIndex={displayIndex}
+      citation={citationLookup.get(factId)}
+    />
+  );
+}
+
+/** Parse ``[f_xxx]`` / ``[f_xxx, f_yyy]`` markers out of the paragraph
+ *  text and replace each with citation chip elements at the original
+ *  position. Returns the interleaved nodes plus a flag the caller uses
+ *  to know whether ANY inline marker was found — when no markers are
+ *  present, the caller falls back to trailing-chip rendering for
+ *  backward compat with persisted articles authored before the v3
+ *  prompt began emitting inline patterns.
+ */
+function renderParagraphWithInlineCitations(
+  text: string,
+  factIdIndex: Map<string, number>,
+  citationLookup: Map<string, WikiCitation>,
+): { nodes: ReactNode[]; foundInlineCitations: boolean } {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let matchIdx = 0;
+  let foundInlineCitations = false;
+  // Reset lastIndex defensively — the regex object is module-scope.
+  INLINE_CITATION_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = INLINE_CITATION_RE.exec(text)) !== null) {
+    foundInlineCitations = true;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (start > cursor) {
+      nodes.push(text.slice(cursor, start));
+    }
+    const factIds = match[1]
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    factIds.forEach((factId, i) => {
+      if (i > 0) nodes.push(", ");
+      nodes.push(
+        renderChipForFactId(
+          factId,
+          factIdIndex,
+          citationLookup,
+          `inline-${matchIdx}-${i}-${factId}`,
+        ),
+      );
+    });
+    matchIdx += 1;
+    cursor = end;
+  }
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+  return { nodes, foundInlineCitations };
+}
+
+/** Render the paragraph text. The v3 prompt embeds ``[f_xxx]`` markers
+ *  inline within ``paragraph.text`` so citations sit at the position
+ *  the writer chose. We parse those markers and replace each with a
+ *  ``CitationChip`` at the same position. When NO inline markers are
+ *  present (older persisted articles authored before the inline-marker
+ *  prompt change) we fall back to trailing chips at the end of the
+ *  paragraph so existing pages keep rendering correctly.
  */
 function ParagraphLine({ paragraph, factIdIndex, citationLookup }: ParagraphProps) {
-  const chips: ReactNode[] = paragraph.citations.map((cid) => {
-    const displayIndex = factIdIndex.get(cid);
-    if (displayIndex === undefined) {
-      // M-3: silently dropping a missing-fact_id citation hides
-      // upgrade-time data drift. In dev render a dim ``[?]`` chip
-      // with ``data-fact-id`` so authors notice; in prod fall back
-      // to the prior "render nothing" behaviour so users never see
-      // diagnostic UI.
-      if (import.meta.env.DEV) {
-        if (!warnedFactIds.has(cid)) {
-          // eslint-disable-next-line no-console -- dev-only diagnostic
-          console.warn(
-            `[NarrativeArticle] citation references missing fact_id: ${cid}`,
-          );
-          warnedFactIds.add(cid);
-        }
-        return (
-          <span
-            key={cid}
-            data-testid="narrative-citation-chip-missing"
-            data-fact-id={cid}
-            title={`Missing fact: ${cid}`}
-            className="inline-flex items-center px-1 py-0.5 mx-0.5 text-[10px] font-medium leading-none rounded bg-amber-500/20 text-amber-700 dark:text-amber-400 cursor-help"
-          >
-            [?]
-          </span>
-        );
-      }
-      return null;
-    }
-    return (
-      <CitationChip
-        key={cid}
-        factId={cid}
-        displayIndex={displayIndex}
-        citation={citationLookup.get(cid)}
-      />
+  const { nodes: inlineNodes, foundInlineCitations } =
+    renderParagraphWithInlineCitations(
+      paragraph.text,
+      factIdIndex,
+      citationLookup,
     );
-  });
+
+  // Backward-compat fallback: pre-inline-marker pages have no
+  // ``[f_xxx]`` patterns in the text but still carry a populated
+  // ``paragraph.citations`` list — render those as trailing chips.
+  const trailingChips: ReactNode[] = [];
+  if (!foundInlineCitations) {
+    paragraph.citations.forEach((cid, i) => {
+      const chip = renderChipForFactId(
+        cid,
+        factIdIndex,
+        citationLookup,
+        `trailing-${i}-${cid}`,
+      );
+      if (chip !== null) trailingChips.push(chip);
+    });
+  }
 
   return (
     <p
@@ -551,10 +640,12 @@ function ParagraphLine({ paragraph, factIdIndex, citationLookup }: ParagraphProp
           [agent-inference]
         </span>
       )}
-      {paragraph.text}
-      {chips.length > 0 && (
+      {inlineNodes.map((node, i) => (
+        <Fragment key={i}>{node}</Fragment>
+      ))}
+      {trailingChips.length > 0 && (
         <span className="ml-0.5">
-          {chips.map((chip, i) => (
+          {trailingChips.map((chip, i) => (
             <Fragment key={i}>{chip}</Fragment>
           ))}
         </span>

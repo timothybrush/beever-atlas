@@ -645,6 +645,161 @@ describe("NarrativeArticleModule — anchor sanitisation (M-8)", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Inline citation parser — `[f_xxx]` patterns embedded in paragraph text
+// ---------------------------------------------------------------------------
+
+describe("NarrativeArticleModule — inline citation parser", () => {
+  it("renders a single inline `[f_xxx]` marker as a citation chip in-place", () => {
+    render(
+      <NarrativeArticleModule
+        module={makeModule([
+          {
+            anchor: "intro",
+            heading: "Intro",
+            paragraphs: [
+              {
+                text: "Atlas adopted Mattermost as the chat layer [f_4].",
+                citations: ["f_4"],
+              },
+            ],
+          },
+        ])}
+        citations={[makeCitation("f_4")]}
+        onNavigate={noop}
+      />,
+    );
+    const chip = screen.getByTestId("narrative-citation-chip");
+    expect(chip).toBeInTheDocument();
+    expect(chip.getAttribute("data-fact-id")).toBe("f_4");
+    expect(chip.textContent).toBe("[1]");
+    // The paragraph still shows the prose surrounding the marker.
+    const para = screen.getByTestId("narrative-paragraph");
+    expect(para.textContent || "").toContain(
+      "Atlas adopted Mattermost as the chat layer ",
+    );
+    expect(para.textContent || "").not.toContain("[f_4]");
+  });
+
+  it("expands `[f_xxx, f_yyy]` chains into multiple chips with comma separators", () => {
+    render(
+      <NarrativeArticleModule
+        module={makeModule([
+          {
+            anchor: "intro",
+            heading: "Intro",
+            paragraphs: [
+              {
+                text: "Two providers were considered [f_4, f_7].",
+                citations: ["f_4", "f_7"],
+              },
+            ],
+          },
+        ])}
+        citations={[makeCitation("f_4"), makeCitation("f_7")]}
+        onNavigate={noop}
+      />,
+    );
+    const chips = screen.getAllByTestId("narrative-citation-chip");
+    expect(chips).toHaveLength(2);
+    expect(chips[0].getAttribute("data-fact-id")).toBe("f_4");
+    expect(chips[1].getAttribute("data-fact-id")).toBe("f_7");
+    expect(chips[0].textContent).toBe("[1]");
+    expect(chips[1].textContent).toBe("[2]");
+    // Comma-separator stays in DOM text between chips.
+    const para = screen.getByTestId("narrative-paragraph");
+    expect(para.textContent || "").toContain("Two providers were considered ");
+    expect(para.textContent || "").not.toMatch(/\[f_4,\s*f_7\]/);
+  });
+
+  it("interleaves text segments and chips at the inline-marker positions", () => {
+    render(
+      <NarrativeArticleModule
+        module={makeModule([
+          {
+            anchor: "intro",
+            heading: "Intro",
+            paragraphs: [
+              {
+                text: "OpenClaw [f_1] supplanted the legacy bridge [f_2] for Atlas.",
+                citations: ["f_1", "f_2"],
+              },
+            ],
+          },
+        ])}
+        citations={[makeCitation("f_1"), makeCitation("f_2")]}
+        onNavigate={noop}
+      />,
+    );
+    const chips = screen.getAllByTestId("narrative-citation-chip");
+    expect(chips).toHaveLength(2);
+    const para = screen.getByTestId("narrative-paragraph");
+    const text = para.textContent || "";
+    expect(text).toContain("OpenClaw ");
+    expect(text).toContain(" supplanted the legacy bridge ");
+    expect(text).toContain(" for Atlas.");
+    // The literal `[f_xxx]` patterns must NOT survive into the DOM text.
+    expect(text).not.toContain("[f_1]");
+    expect(text).not.toContain("[f_2]");
+  });
+
+  it("backward compat: paragraph with NO inline markers still renders trailing chips", () => {
+    // Old persisted articles authored before the inline-marker prompt
+    // change have no ``[f_xxx]`` patterns in ``text`` but DO carry
+    // ``paragraph.citations`` — those keep rendering as trailing chips.
+    render(
+      <NarrativeArticleModule
+        module={makeModule([
+          {
+            anchor: "intro",
+            heading: "Intro",
+            paragraphs: [
+              {
+                text: "A pre-inline-marker paragraph with no embedded citations.",
+                citations: ["f_a", "f_b"],
+              },
+            ],
+          },
+        ])}
+        citations={[makeCitation("f_a"), makeCitation("f_b")]}
+        onNavigate={noop}
+      />,
+    );
+    const chips = screen.getAllByTestId("narrative-citation-chip");
+    expect(chips).toHaveLength(2);
+    const para = screen.getByTestId("narrative-paragraph");
+    expect(para.textContent || "").toContain(
+      "A pre-inline-marker paragraph with no embedded citations.",
+    );
+  });
+
+  it("does NOT append trailing chips when inline markers were already rendered", () => {
+    // When inline markers are present, the renderer must NOT also
+    // re-emit trailing chips — that would double-render the citations.
+    render(
+      <NarrativeArticleModule
+        module={makeModule([
+          {
+            anchor: "intro",
+            heading: "Intro",
+            paragraphs: [
+              {
+                text: "Inline [f_a] only.",
+                citations: ["f_a"],
+              },
+            ],
+          },
+        ])}
+        citations={[makeCitation("f_a")]}
+        onNavigate={noop}
+      />,
+    );
+    // Exactly one chip — the inline one. No trailing duplicate.
+    const chips = screen.getAllByTestId("narrative-citation-chip");
+    expect(chips).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // M-3: missing fact_id chip — dev-only [?] fallback (defensive guard)
 // ---------------------------------------------------------------------------
 //

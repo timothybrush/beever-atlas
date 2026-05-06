@@ -1094,7 +1094,13 @@ async def compile_folder_page_modular(
     from beever_atlas.wiki.modules.top_contributors import (
         build_top_contributors_data,
     )
-    from beever_atlas.wiki.prompts import build_module_compile_folder_prompt
+    from beever_atlas.wiki.modules.narrative_validator import (
+        validate_narrative_sections,
+    )
+    from beever_atlas.wiki.prompts import (
+        build_module_compile_folder_prompt,
+        get_archetype_hint_block,
+    )
 
     # ── Stage 0 — compute signals from the descendant aggregate.
     # The cluster shape feeds the topic-archetype branches with empty
@@ -1137,14 +1143,29 @@ async def compile_folder_page_modular(
     # fire on a folder index page.
     signals["archetype"] = "folder"
 
-    # ── Stage 1 — build pre-aggregated payloads for hero context.
+    # ── Stage 1 — build pre-aggregated payloads for hero + narrative
+    # context.
     contributors_data = build_top_contributors_data(descendants)
     top_contributors_for_prompt = contributors_data.get("items", [])
     decisions_data = build_cross_cutting_decisions_data(descendants)
     top_decisions_for_prompt = decisions_data.get("items", [])
+    # Top facts surface = highest-importance facts across descendants,
+    # capped at 12 to keep prompt tokens manageable. ``importance`` /
+    # ``quality_score`` order with a fallback to position.
+    def _fact_score(f: dict) -> float:
+        for k in ("importance", "quality_score", "score"):
+            v = f.get(k)
+            if isinstance(v, (int, float)):
+                return float(v)
+        return 0.0
+
+    top_facts_for_prompt = sorted(
+        aggregated_facts, key=_fact_score, reverse=True
+    )[:12]
 
     # ── Stage 2 — single LLM call.
     catalog_view = _folder_catalog_view()
+    archetype_hint = get_archetype_hint_block("folder")
     prompt = build_module_compile_folder_prompt(
         signals=signals,
         module_catalog=catalog_view,
@@ -1152,6 +1173,9 @@ async def compile_folder_page_modular(
         children=children,
         top_contributors=top_contributors_for_prompt,
         top_decisions=top_decisions_for_prompt,
+        top_facts=top_facts_for_prompt,
+        open_questions=aggregated_open_questions,
+        archetype_hint_block=archetype_hint,
     )
 
     try:
@@ -1172,10 +1196,64 @@ async def compile_folder_page_modular(
         )
         return _fallback_folder_output(folder_title, descendants, signals)
 
+    # ── Stage 3.5 — extract + validate narrative_sections. Folder
+    # narrative articles synthesise across descendants. Validator gates
+    # citation discipline + word caps; rejected output → empty list,
+    # narrative_article module's predicate fails, page renders module-
+    # only (graceful fallback).
+    narrative_sections_clean: list[dict[str, Any]] = []
+    narrative_telemetry: dict[str, Any] = {}
+    raw_narrative = parsed.get("narrative_sections")
+    if not isinstance(raw_narrative, list):
+        raw_narrative = []
+    try:
+        (
+            narrative_sections_clean,
+            narrative_telemetry,
+        ) = validate_narrative_sections(
+            raw_narrative,
+            facts=top_facts_for_prompt,
+        )
+    except Exception as exc:  # noqa: BLE001 — validator must never crash render
+        logger.exception(
+            "narrative_validator_unhandled_exception_folder exc=%s", exc
+        )
+        narrative_sections_clean = []
+        narrative_telemetry = {
+            "rejected": True,
+            "reason": "validator_exception",
+            "citation_coverage": 0.0,
+            "total_words": 0,
+            "sections_dropped": 0,
+            "paragraphs_dropped": 0,
+        }
+    if narrative_telemetry.get("rejected"):
+        logger.info(
+            "narrative_article_fallback reason=%s page=folder-%s coverage=%.3f",
+            narrative_telemetry.get("reason", "unknown"),
+            folder_slug,
+            float(narrative_telemetry.get("citation_coverage", 0.0)),
+        )
+    logger.info(
+        "narrative_article_metrics page=folder-%s section_count=%d total_words=%d "
+        "citation_coverage=%.3f distinct_facts_cited=%d rejected=%s",
+        folder_slug,
+        int(narrative_telemetry.get("section_count", len(narrative_sections_clean))),
+        int(narrative_telemetry.get("total_words", 0)),
+        float(narrative_telemetry.get("citation_coverage", 0.0)),
+        int(narrative_telemetry.get("distinct_facts_cited", 0)),
+        bool(narrative_telemetry.get("rejected", False)),
+    )
+
     # ── Stage 4 — validate the plan + parse the hero TL;DR + summary.
     plan_dict = parsed.get("plan") or {}
     if not isinstance(plan_dict, dict):
         plan_dict = {}
+    # Make narrative_section_count visible to the planner so the
+    # narrative_article module's eligibility predicate sees a positive
+    # signal when the LLM returned a validated narrative.
+    signals = dict(signals)
+    signals["narrative_section_count"] = len(narrative_sections_clean)
     plan = _validate_plan(plan_dict, signals)
     if plan.is_empty():
         logger.info("module_compile_folder_plan_empty_fallback")
@@ -1202,6 +1280,15 @@ async def compile_folder_page_modular(
                 overview=overview,
                 signals=signals,
                 facts=aggregated_facts,
+            )
+        elif mid == "narrative_article":
+            from beever_atlas.wiki.modules.narrative_article import (
+                build_narrative_article_data,
+            )
+
+            entry["data"] = build_narrative_article_data(
+                narrative_sections_clean,
+                aggregated_facts,
             )
         elif mid == "subpage_cards":
             # subpage_cards uses the python renderer (children TOC

@@ -819,17 +819,30 @@ The `narrative_sections` array is the new SPOTLIGHT of every page — a multi-se
 - Total article: 1,500-3,000 words for typical topic pages, up to 5,000 for landmark pages (channel overview). The validator HARD-rejects articles over 6,000 words.
 - Be concise like a Wikipedia editor — every paragraph adds new information. NO padding.
 
-**Optional supporting visual per section**:
-- Each section MAY include at most ONE visual via the `visual` field. Use ONLY when the visual genuinely helps comprehension; otherwise set `visual: null`.
-- Allowed kinds: `table` (comparison/data), `mermaid` (architecture/flow), `list` (enumeration), `callout` (warnings/tips), `code` (technical content), `blockquote` (important statements).
-- Visual shape:
-  - `{{"kind": "table", "content": {{"headers": ["A", "B"], "rows": [["1", "2"]]}}}}`
-  - `{{"kind": "mermaid", "content": "graph TD\\n  A --> B"}}`
-  - `{{"kind": "list", "content": {{"ordered": false, "items": ["one", "two"]}}}}`
-  - `{{"kind": "callout", "content": {{"variant": "warning|info|tip", "text": "..."}}}}`
-  - `{{"kind": "code", "content": {{"language": "python", "code": "..."}}}}`
-  - `{{"kind": "blockquote", "content": "..."}}`
-- Visuals sit INLINE within the section, not at the article footer.
+**Visual guidance per section (NOT optional when content fits)**:
+
+When a section's content has any of these shapes, you MUST include the matching visual:
+
+- **Comparison / options** (2+ alternatives, trade-offs, before/after) → `table` with headers
+- **Sequence / process / workflow / pipeline** → `mermaid` `graph TD` or ordered `list`
+- **Architecture / system relationships / data flow** → `mermaid` `graph TD` with labeled edges
+- **Enumeration of 4+ items** (libraries, decisions, contributors, milestones) → bulleted `list`
+- **Statement of importance / quote / direct claim worth highlighting** → `blockquote`
+- **Code / config / command snippet** → `code` block
+
+Default to including a visual — every section is more readable with one. Set `visual: null` ONLY when the section is purely interpretive prose (no comparison, sequence, architecture, enumeration, or quotable claim).
+
+Allowed kinds: `table`, `mermaid`, `list`, `callout`, `code`, `blockquote`.
+
+Visual shape:
+- `{{"kind": "table", "content": {{"headers": ["A", "B"], "rows": [["1", "2"]]}}}}`
+- `{{"kind": "mermaid", "content": "graph TD\\n  A[Foo] --> B[Bar]"}}`
+- `{{"kind": "list", "content": {{"ordered": false, "items": ["one", "two", "three"]}}}}`
+- `{{"kind": "callout", "content": {{"variant": "warning|info|tip", "text": "..."}}}}`
+- `{{"kind": "code", "content": {{"language": "python", "code": "..."}}}}`
+- `{{"kind": "blockquote", "content": {{"text": "...", "attribution": "Speaker"}}}}`
+
+Visuals sit INLINE within the section, not at the article footer. At most ONE visual per section.
 
 **Agent voice**:
 - Third-person synthetic voice. Wikipedia-editor style. NO "I", "we", "our".
@@ -1073,7 +1086,7 @@ def build_module_compile_prompt_v3(
     )
 
 
-MODULE_COMPILE_FOLDER_PROMPT = """You are an adaptive wiki page compiler. The page is a FOLDER INDEX — a wayfinding + dashboard layer over the descendant pages. In ONE response, decide which folder modules to render AND author the bold TL;DR + 2-3 sentence summary that frame the folder.
+MODULE_COMPILE_FOLDER_PROMPT = """You are an adaptive wiki page compiler. The page is a FOLDER INDEX — a wayfinding + dashboard layer over the descendant pages. In ONE response, decide which folder modules to render, author the bold TL;DR + 2-3 sentence summary that frame the folder, AND write a multi-section narrative article that synthesizes across the descendants.
 
 ## Module catalog (folder-archetype subset — selection rules)
 
@@ -1089,6 +1102,10 @@ Folder title: {folder_title}
 Direct children (in display order): {children_json}
 Top contributors across descendants (pre-aggregated): {top_contributors_json}
 Top decisions across descendants (pre-aggregated): {top_decisions_json}
+Top facts across descendants (for synthesis + citation): {top_facts_json}
+Open questions across descendants: {open_questions_json}
+
+{archetype_hint_block}
 
 ## Output
 
@@ -1106,16 +1123,83 @@ Return JSON ONLY with this exact shape:
     "tldr": "<single bold sentence — what this folder is about>",
     "summary": "<2-3 sentence prose framing scope, key contributors, and any unresolved tension>"
   }},
+  "narrative_sections": [
+    {{
+      "anchor": "<kebab-case>",
+      "heading": "<Human readable section title>",
+      "paragraphs": [
+        {{
+          "text": "<paragraph prose with [f_xxx] inline citations>",
+          "citations": ["f_xxx", "f_yyy"],
+          "is_inference": false
+        }}
+      ],
+      "visual": null
+    }}
+  ],
   "body_connectors": {{}}
 }}
+
+## Narrative-article rules (the new heart of the folder page)
+
+The `narrative_sections` array synthesises ACROSS the descendant pages — it does NOT duplicate each child's narrative. Folder narrative is the cross-cutting story: shared threads, recent shifts, top decisions, tensions spanning sub-pages.
+
+**Section structure** (typical folder narrative):
+- Each section has a unique `anchor` (kebab-case, ≤ 24 chars), a `heading` (human readable, sentence case), and a `paragraphs` array.
+- Aim for 3-5 sections per folder. Sections should synthesize ACROSS descendants — not summarise each child individually.
+- Section titles MUST emerge from the descendant content. Good examples: "Multi-platform connector strategy", "Memory-tier persistence decisions". Bad: generic "Overview", "Context".
+
+**Paragraph structure**:
+- Each paragraph is 3-5 sentences. Active voice. Short.
+- `text`: the paragraph prose. Synthesise across descendants — name 2-3 children when their content connects.
+- `citations`: array of fact_ids cited inline within `text`. Format inline as `[f_xxx]`.
+- `is_inference`: set to `true` for SYNTHESIS paragraphs that interpret beyond direct facts. Inference paragraphs MUST still cite ≥1 fact_id.
+
+**Citation discipline (HARD RULES)**:
+- EVERY paragraph MUST cite at least one fact_id. Uncited paragraphs are DROPPED.
+- Inference paragraphs (`is_inference: true`) MUST still cite ≥1 fact_id.
+- FORBIDDEN narration phrases (paragraphs containing these are DROPPED): "shared a link", "shared an article", "noted that", "mentioned that", "posted about", "presented that".
+- Article citation coverage MUST be ≥ 80%; below that, the article is REJECTED and the page falls back to module-only rendering.
+
+**Word caps**:
+- Each section: 150-400 words. Sections over 400 words are TRUNCATED.
+- Total folder article: 1,500-3,000 words. Stay focused — folder narrative complements but does not replace child pages.
+
+**Visual guidance per section (NOT optional when content fits)**:
+
+When a section's content has any of these shapes, you MUST include the matching visual:
+
+- **Comparison / options** (2+ alternatives, trade-offs) → `table` with headers
+- **Sequence / process / workflow** → `mermaid` `graph TD` or ordered `list`
+- **Architecture / cross-page relationships** → `mermaid` `graph TD` with labeled edges
+- **Enumeration of 4+ items** (children, decisions, contributors) → bulleted `list`
+- **Statement of importance / quote** → `blockquote`
+- **Code / config snippet** → `code` block
+
+Default to including a visual — every section is more readable with one. Set `visual: null` ONLY when the section is purely interpretive prose.
+
+Visual shape:
+- `{{"kind": "table", "content": {{"headers": ["A", "B"], "rows": [["1", "2"]]}}}}`
+- `{{"kind": "mermaid", "content": "graph TD\\n  A[Foo] --> B[Bar]"}}`
+- `{{"kind": "list", "content": {{"ordered": false, "items": ["one", "two", "three"]}}}}`
+- `{{"kind": "callout", "content": {{"variant": "warning|info|tip", "text": "..."}}}}`
+- `{{"kind": "code", "content": {{"language": "python", "code": "..."}}}}`
+- `{{"kind": "blockquote", "content": {{"text": "...", "attribution": "Speaker"}}}}`
+
+**Agent voice**:
+- Third-person synthetic voice. Wikipedia-editor style. NO "I", "we", "our".
+- Short paragraphs. Active voice. Active verbs name the outcome.
+- Cite every claim with `[f_xxx]` inline.
+- If you cannot produce a quality narrative (e.g. < 4 facts across descendants), emit `narrative_sections: []` and rely on module-only rendering.
 
 ## Module-selection rules
 
 - **HARD RULE — Module #1 in your plan MUST be `hero_summary`.** It reads your `hero.tldr` and `hero.summary` to render the page header.
-- **HARD RULE — Module #2 MUST be `subpage_cards`** when at least one child exists. Subpage cards are the primary wayfinding device on a folder page.
-- **HARD RULE — Module #3 MUST be `folder_stats`** when `child_count` ≥ 2. The 4-card big-number strip is the at-a-glance dashboard that replaces the legacy 'Themes & threads' prose.
-- **HARD RULE — Module #4 SHOULD be `top_contributors`** when `distinct_contributor_count` ≥ 2.
-- **HARD RULE — Module #5 SHOULD be `cross_cutting_decisions`** when `descendant_decision_count` ≥ 2.
+- **HARD RULE — When `narrative_sections` has at least one validated section, include `narrative_article` IMMEDIATELY AFTER `hero_summary` (module #2).**
+- **HARD RULE — `subpage_cards` MUST appear** when at least one child exists. Subpage cards are the primary wayfinding device on a folder page.
+- **HARD RULE — `folder_stats` MUST appear** when `child_count` ≥ 2.
+- **HARD RULE — `top_contributors` SHOULD appear** when `distinct_contributor_count` ≥ 2.
+- **HARD RULE — `cross_cutting_decisions` SHOULD appear** when `descendant_decision_count` ≥ 2.
 - **HARD RULE — Penultimate module SHOULD be `open_questions`** when `open_question_count` ≥ 1.
 - **HARD RULE — The LAST module MUST be `provenance_drawer`** when `fact_count` ≥ 1.
 - A module is ELIGIBLE only when its catalog rule is satisfied — the validator will drop ineligible picks.
@@ -1124,13 +1208,13 @@ Return JSON ONLY with this exact shape:
 ## Hero authoring rules
 
 - TL;DR is exactly ONE bold sentence (`**…**`) that names the folder's domain in concrete terms — no generic "this folder contains topics" filler.
-- Summary is 2-3 sentences. Cover: (a) the throughline connecting the children, (b) who's most active, (c) any unresolved tension. Be specific — reference actual child topics by name when it sharpens the framing.
-- DO NOT write a separate body — the modules render the dashboard. Hero is the only prose surface on the page.
+- Summary is 2-3 sentences. Cover: (a) the throughline connecting the children, (b) who's most active, (c) any unresolved tension.
+- DO NOT write a separate body — the modules render the dashboard. Hero + narrative are the only prose surfaces on the page.
 
 ## Hard rules
 
 - Output JSON ONLY. No markdown fences around the outer JSON. No prose before or after.
-- DO NOT emit the literal string "Themes & threads" — the prose blob is GONE; the dashboard replaces it.
+- DO NOT emit the literal string "Themes & threads" — the dashboard replaces it.
 - DO NOT use @ / # / $ entity prefixes — write names normally.
 """
 
@@ -1143,12 +1227,21 @@ def build_module_compile_folder_prompt(
     children: list[dict],
     top_contributors: list[dict],
     top_decisions: list[dict],
+    top_facts: list[dict] | None = None,
+    open_questions: list[dict] | None = None,
+    archetype_hint_block: str = "",
 ) -> str:
     """Render ``MODULE_COMPILE_FOLDER_PROMPT`` with the folder data.
 
-    Single-call: planner + writer collapsed into one prompt so cost
-    stays at 1 LLM call per folder page (same as the legacy
-    ``FOLDER_INDEX_PROMPT`` flow).
+    Single-call: planner + writer + narrative author collapsed into one
+    prompt so cost stays at 1 LLM call per folder page (same as the
+    legacy ``FOLDER_INDEX_PROMPT`` flow).
+
+    ``top_facts`` is up to 12 highest-quality facts aggregated across
+    the folder's descendants — the LLM uses these as the citation
+    surface for the narrative article. ``open_questions`` lets the
+    narrative reference unresolved threads. ``archetype_hint_block``
+    pre-renders the Folder-archetype section-structure hint.
     """
     import json as _json
 
@@ -1183,6 +1276,24 @@ def build_module_compile_folder_prompt(
         }
         for d in (top_decisions or [])[:5]
     ]
+    facts_payload = [
+        {
+            "fact_id": f.get("fact_id") or f.get("id") or "",
+            "memory_text": (f.get("memory_text") or f.get("fact") or "")[:240],
+            "author": f.get("author_name") or f.get("user_name") or "",
+            "fact_type": f.get("fact_type") or "",
+        }
+        for f in (top_facts or [])[:12]
+        if isinstance(f, dict)
+    ]
+    open_questions_payload = [
+        {
+            "question": (q.get("question") or "")[:200],
+            "raised": q.get("raised") or "",
+        }
+        for q in (open_questions or [])[:8]
+        if isinstance(q, dict)
+    ]
     return MODULE_COMPILE_FOLDER_PROMPT.format(
         module_catalog_block=catalog_block,
         signals_json=_json.dumps(signals, indent=2, default=str),
@@ -1190,6 +1301,9 @@ def build_module_compile_folder_prompt(
         children_json=_json.dumps(children_payload, indent=2),
         top_contributors_json=_json.dumps(contributors_payload, indent=2),
         top_decisions_json=_json.dumps(decisions_payload, indent=2),
+        top_facts_json=_json.dumps(facts_payload, indent=2, default=str),
+        open_questions_json=_json.dumps(open_questions_payload, indent=2, default=str),
+        archetype_hint_block=archetype_hint_block or "",
     )
 
 
