@@ -875,6 +875,43 @@ async def get_wiki_page_by_slug(
 # ---------------------------------------------------------------------------
 
 
+def _page_has_renderable_content(page: object) -> bool:
+    """Return True iff a wiki page has body content the UI can render.
+
+    The structure planner pre-allocates ``wiki_pages`` rows for fixed
+    pages (overview, people, activity, faq) before the compiler runs.
+    On small / sparse channels, the compiler skips populating some of
+    these (insufficient signal to write a meaningful FAQ, etc.) and
+    leaves the row with empty ``content`` / no ``modules`` / empty
+    ``narrative_sections``. Including these in the graph or any UI
+    listing creates ghost nodes that resolve to a black page when
+    clicked. This predicate is the single check that separates
+    "page exists in the store" from "page has anything to show".
+
+    Renderable means at least one of:
+      * ``page.content`` is a non-empty string after stripping, OR
+      * ``page.narrative_sections`` is a non-empty list, OR
+      * ``page.modules`` contains at least one module whose ``data``
+        dict is non-empty (an empty ``data`` is what the compiler
+        emits for unpopulated module slots).
+    """
+    content = getattr(page, "content", None)
+    if isinstance(content, str) and content.strip():
+        return True
+    narrative_sections = getattr(page, "narrative_sections", None)
+    if isinstance(narrative_sections, list) and narrative_sections:
+        return True
+    modules = getattr(page, "modules", None)
+    if isinstance(modules, list):
+        for m in modules:
+            if not isinstance(m, dict):
+                continue
+            data = m.get("data")
+            if isinstance(data, dict) and data:
+                return True
+    return False
+
+
 @router.get("/graph")
 async def get_wiki_graph(
     channel_id: str,
@@ -911,7 +948,16 @@ async def get_wiki_graph(
     seen_node_ids: set[str] = set()
     seen_edges: set[tuple[str, str, str]] = set()
 
-    # 1) Wiki page nodes — every visible page in the channel.
+    # 1) Wiki page nodes — every visible page in the channel that has
+    # actual content. Pages exist in ``wiki_pages`` for all human-scope
+    # rows including fixed pages (overview, people, activity, faq) that
+    # the structure planner created as placeholders. On small channels
+    # those placeholders are never populated by the compiler — they
+    # come back with empty content / empty modules / no narrative — and
+    # appear in the graph as ghost nodes that resolve to blank pages
+    # when clicked. Filter them out here so the graph reflects what
+    # the user can actually read, not what the planner pre-allocated.
+    #
     # Build a parallel ``page_id → slug`` index so the parent_id chain
     # (which references the persistent page_id, NOT the slug used as
     # node id) can be resolved when emitting `child_of` edges below.
@@ -919,6 +965,8 @@ async def get_wiki_graph(
     for page in pages:
         slug = page.slug or page.page_id.replace(":", "-")
         if not slug or slug in seen_node_ids:
+            continue
+        if not _page_has_renderable_content(page):
             continue
         seen_node_ids.add(slug)
         if page.page_id:

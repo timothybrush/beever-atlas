@@ -28,8 +28,15 @@ interface ParsedFaq {
  *   **Q: question text**
  *   A: answer text [N]
  *   ---
+ *
+ * Tolerates ``null``/``undefined`` content so a page from the modular
+ * pipeline (where the body lives in ``modules[]`` instead of a
+ * top-level ``content`` string) does not crash the renderer.
  */
-function parseFaqMarkdown(raw: string): ParsedFaq {
+function parseFaqMarkdown(raw: string | null | undefined): ParsedFaq {
+  if (!raw) {
+    return { preamble: "", sections: [], trailer: "" };
+  }
   // Strip leading h1 (title rendered separately)
   const content = raw.replace(/^#\s+[^\n]+\n*/, "");
 
@@ -167,10 +174,18 @@ export function FaqPage({ page, onNavigate, lang }: FaqPageProps) {
             </div>
           ))}
         </div>
-      ) : (
+      ) : page.content ? (
         /* Fallback: render as plain markdown if parsing finds no structured Q&As */
         <div className="mt-6">
           <WikiMarkdown content={page.content.replace(/^#\s+[^\n]+\n*/, "")} citations={page.citations} onNavigate={onNavigate} />
+        </div>
+      ) : (
+        /* No structured Q&A AND no plain markdown body — happens when the
+         * FAQ page exists in the page_store but compilation produced no
+         * content (e.g., channel was too small to populate questions).
+         * Render an honest empty state instead of a black screen. */
+        <div className="mt-6 rounded-lg border border-dashed border-border bg-muted/10 px-6 py-10 text-center text-sm text-muted-foreground">
+          No FAQ available yet — synced messages haven't produced enough Q&amp;A signal.
         </div>
       )}
 
