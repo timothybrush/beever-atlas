@@ -31,9 +31,7 @@ def test_render_children_toc_with_summary() -> None:
     # position — guarantees the word-boundary path fires (not the
     # all-no-space fallback that bare-truncates to 200 + ellipsis).
     long_summary = ("x " * 125).rstrip()  # 249 chars
-    rendered = render_children_toc(
-        [{"title": "T", "slug": "t", "summary": long_summary}]
-    )
+    rendered = render_children_toc([{"title": "T", "slug": "t", "summary": long_summary}])
     assert rendered.startswith("- [T](/wiki/t) — ")
     # Truncated content followed by ellipsis sentinel.
     assert rendered.endswith("…")
@@ -65,10 +63,9 @@ def test_render_children_toc_does_not_truncate_mid_word() -> None:
         # A complete word means: ends with letters (no leading partial
         # syllable like "platfo"). Loose check: the last word, if
         # appearing in the original, must appear as a whole word.
-        assert (
-            f" {last_word} " in f" {long_real} "
-            or long_real.endswith(last_word)
-        ), f"Truncated mid-word: ...{summary_part[-30:]}"
+        assert f" {last_word} " in f" {long_real} " or long_real.endswith(last_word), (
+            f"Truncated mid-word: ...{summary_part[-30:]}"
+        )
     else:
         # Otherwise the summary fits within budget — fragment must end
         # at a sentence terminator.
@@ -89,11 +86,7 @@ def test_render_children_toc_empty() -> None:
 
 def test_apply_marker_replaces_inline() -> None:
     """Marker in the middle of content is replaced with the rendered TOC."""
-    content = (
-        "## Intro\nSome prose.\n\n"
-        + CHILDREN_TOC_MARKER
-        + "\n\n## Threads\nSome more prose."
-    )
+    content = "## Intro\nSome prose.\n\n" + CHILDREN_TOC_MARKER + "\n\n## Threads\nSome more prose."
     out = apply_children_toc_marker(
         content, [{"title": "A", "slug": "a"}, {"title": "B", "slug": "b"}]
     )
@@ -114,11 +107,7 @@ def test_apply_marker_appends_fallback_when_marker_missing() -> None:
 
 def test_apply_marker_strips_marker_line_when_no_children() -> None:
     """Marker line dropped when children is empty (no useless heading)."""
-    content = (
-        "## Intro\n\n"
-        + CHILDREN_TOC_MARKER
-        + "\n\n## After"
-    )
+    content = "## Intro\n\n" + CHILDREN_TOC_MARKER + "\n\n## After"
     out = apply_children_toc_marker(content, [])
     assert CHILDREN_TOC_MARKER not in out
     assert "## After" in out

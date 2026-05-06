@@ -31,9 +31,7 @@ from typing import Any
 # (``NarrativeArticleModule.tsx`` ``INLINE_CITATION_RE``). Keeping the
 # two regexes structurally identical means Markdown export and live
 # render agree on what is a citation marker vs. literal text.
-_INLINE_CITATION_RE = re.compile(
-    r"\[(f_[a-zA-Z0-9_]+(?:\s*,\s*f_[a-zA-Z0-9_]+)*)\]"
-)
+_INLINE_CITATION_RE = re.compile(r"\[(f_[a-zA-Z0-9_]+(?:\s*,\s*f_[a-zA-Z0-9_]+)*)\]")
 
 
 def _build_fact_id_index(sections: list[dict[str, Any]]) -> dict[str, int]:
@@ -141,11 +139,7 @@ def _render_visual(visual: dict[str, Any]) -> str:
     if kind == "callout":
         if not isinstance(content, dict):
             return ""
-        variant_raw = (
-            str(content.get("variant") or content.get("type") or "note")
-            .strip()
-            .lower()
-        )
+        variant_raw = str(content.get("variant") or content.get("type") or "note").strip().lower()
         text = content.get("text")
         if not isinstance(text, str):
             text = content.get("content") if isinstance(content.get("content"), str) else ""

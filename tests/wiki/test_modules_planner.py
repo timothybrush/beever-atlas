@@ -129,9 +129,7 @@ def test_compute_signals_distinct_edge_verbs_uses_type_field_when_label_missing(
 
 
 def test_compute_signals_edge_signals_handle_empty_relationships() -> None:
-    signals = compute_signals(
-        cluster={"title": "T", "member_facts": []}, relationships=[]
-    )
+    signals = compute_signals(cluster={"title": "T", "member_facts": []}, relationships=[])
     assert signals["max_edges_between_same_pair"] == 0
     assert signals["distinct_edge_verbs"] == 0
 

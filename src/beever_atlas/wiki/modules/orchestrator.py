@@ -176,17 +176,13 @@ def _extract_media_for_module(
             build_top_contributors_data,
         )
 
-        return build_top_contributors_data(
-            render_inputs.get("descendants") or []
-        )
+        return build_top_contributors_data(render_inputs.get("descendants") or [])
     if module_id == "cross_cutting_decisions":
         from beever_atlas.wiki.modules.cross_cutting_decisions import (
             build_cross_cutting_decisions_data,
         )
 
-        return build_cross_cutting_decisions_data(
-            render_inputs.get("descendants") or []
-        )
+        return build_cross_cutting_decisions_data(render_inputs.get("descendants") or [])
     if module_id == "narrative_article":
         from beever_atlas.wiki.modules.narrative_article import (
             build_narrative_article_data,
@@ -237,14 +233,16 @@ def _extract_media_for_module(
             mid = getattr(pin, "media_id", "")
             for m in media:
                 if isinstance(m, dict) and str(m.get("id", "")) == str(mid):
-                    items.append({
-                        "media_id": mid,
-                        "url": m.get("url", ""),
-                        "alt": m.get("alt") or m.get("title") or "",
-                        "caption": m.get("caption") or "",
-                        "fact_id": getattr(pin, "fact_id", ""),
-                        "kind": (m.get("kind") or "image"),
-                    })
+                    items.append(
+                        {
+                            "media_id": mid,
+                            "url": m.get("url", ""),
+                            "alt": m.get("alt") or m.get("title") or "",
+                            "caption": m.get("caption") or "",
+                            "fact_id": getattr(pin, "fact_id", ""),
+                            "kind": (m.get("kind") or "image"),
+                        }
+                    )
                     break
         return {"label": "Inline media", "renderer_kind": "frontend", "items": items}
 
@@ -258,17 +256,18 @@ def _extract_media_for_module(
                 continue  # already pinned as inline
             kind = (m.get("kind") or "").lower()
             url = (m.get("url") or "").lower()
-            is_image = (
-                kind in {"image", "screenshot"}
-                or url.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+            is_image = kind in {"image", "screenshot"} or url.endswith(
+                (".png", ".jpg", ".jpeg", ".gif", ".webp")
             )
             if is_image and not m.get("is_hero"):
-                items.append({
-                    "url": m.get("url", ""),
-                    "alt": m.get("alt") or m.get("title") or "",
-                    "caption": m.get("caption") or "",
-                    "kind": "image",
-                })
+                items.append(
+                    {
+                        "url": m.get("url", ""),
+                        "alt": m.get("alt") or m.get("title") or "",
+                        "caption": m.get("caption") or "",
+                        "kind": "image",
+                    }
+                )
         return {"label": "Gallery", "renderer_kind": "frontend", "items": items}
 
     if module_id == "link_card":
@@ -277,19 +276,23 @@ def _extract_media_for_module(
             if not isinstance(m, dict):
                 continue
             kind = (m.get("kind") or "").lower()
-            url = (m.get("url") or "")
+            url = m.get("url") or ""
             if kind == "link" or (
                 url.startswith("http")
-                and not url.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".webm"))
+                and not url.lower().endswith(
+                    (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".mp4", ".webm")
+                )
                 and "youtube.com" not in url.lower()
                 and "vimeo.com" not in url.lower()
             ):
-                items.append({
-                    "url": url,
-                    "title": m.get("title") or m.get("alt") or url,
-                    "description": m.get("description") or m.get("caption") or "",
-                    "favicon": m.get("favicon") or "",
-                })
+                items.append(
+                    {
+                        "url": url,
+                        "title": m.get("title") or m.get("alt") or url,
+                        "description": m.get("description") or m.get("caption") or "",
+                        "favicon": m.get("favicon") or "",
+                    }
+                )
         return {"label": "Linked resource", "renderer_kind": "frontend", "items": items}
 
     if module_id == "pdf_preview":
@@ -298,13 +301,15 @@ def _extract_media_for_module(
             if not isinstance(m, dict):
                 continue
             kind = (m.get("kind") or "").lower()
-            url = (m.get("url") or "")
+            url = m.get("url") or ""
             if kind == "pdf" or url.lower().endswith(".pdf"):
-                items.append({
-                    "url": url,
-                    "title": m.get("title") or m.get("alt") or "",
-                    "thumbnail_url": m.get("thumbnail_url") or "",
-                })
+                items.append(
+                    {
+                        "url": url,
+                        "title": m.get("title") or m.get("alt") or "",
+                        "thumbnail_url": m.get("thumbnail_url") or "",
+                    }
+                )
         return {"label": "Document", "renderer_kind": "frontend", "items": items}
 
     if module_id == "video_embed":
@@ -322,11 +327,13 @@ def _extract_media_for_module(
             elif kind == "video" or url.endswith((".mp4", ".webm")):
                 video_kind = "native"
             if video_kind:
-                items.append({
-                    "url": m.get("url", ""),
-                    "kind": video_kind,
-                    "title": m.get("title") or m.get("alt") or "",
-                })
+                items.append(
+                    {
+                        "url": m.get("url", ""),
+                        "kind": video_kind,
+                        "title": m.get("title") or m.get("alt") or "",
+                    }
+                )
         return {"label": "Video", "renderer_kind": "frontend", "items": items}
 
     return {"label": module_id, "renderer_kind": "frontend"}
@@ -426,9 +433,7 @@ def _render_python_module(module_id: str, data: dict[str, Any]) -> str:
     try:
         mod = importlib.import_module(f"beever_atlas.wiki.modules.{module_id}")
     except ImportError as exc:
-        logger.warning(
-            "module_renderer_import_failed module=%s exc=%s", module_id, exc
-        )
+        logger.warning("module_renderer_import_failed module=%s exc=%s", module_id, exc)
         return ""
     renderer = getattr(mod, "render", None)
     if not callable(renderer):
@@ -439,7 +444,9 @@ def _render_python_module(module_id: str, data: dict[str, Any]) -> str:
     except Exception as exc:  # noqa: BLE001 — never abort the page on one bad module
         logger.warning(
             "module_renderer_failed module=%s exc_type=%s exc=%s",
-            module_id, type(exc).__name__, exc,
+            module_id,
+            type(exc).__name__,
+            exc,
         )
         return ""
     return out if isinstance(out, str) else ""
@@ -528,7 +535,9 @@ def _suppress_thin_modules(
         if reason is not None:
             logger.info(
                 "module_suppressed reason=%s module=%s page_id=%s",
-                reason, mid, page_id,
+                reason,
+                mid,
+                page_id,
             )
             continue
         kept.append(entry)
@@ -589,9 +598,7 @@ def _analyze_mermaid_block(inner: str) -> tuple[int, int, int]:
     # with an optional label. We don't validate the source / target
     # tokens; any non-whitespace run before / after the arrow counts as
     # a node id for grouping purposes.
-    edge_re = re.compile(
-        r"([A-Za-z0-9_]+)\s*-->(?:\s*\|([^|]*)\|)?\s*([A-Za-z0-9_]+)"
-    )
+    edge_re = re.compile(r"([A-Za-z0-9_]+)\s*-->(?:\s*\|([^|]*)\|)?\s*([A-Za-z0-9_]+)")
     for match in edge_re.finditer(inner):
         src = match.group(1) or ""
         verb = (match.group(2) or "").strip()
@@ -636,9 +643,7 @@ def _strip_noisy_body_mermaid(
     for match in _MERMAID_BLOCK_RE.finditer(body):
         inner = match.group(1)
         total_edges, distinct_verbs, max_pair_edges = _analyze_mermaid_block(inner)
-        is_noisy = total_edges == 0 or (
-            max_pair_edges > 5 and distinct_verbs <= 1
-        )
+        is_noisy = total_edges == 0 or (max_pair_edges > 5 and distinct_verbs <= 1)
         if not is_noisy:
             continue
         # Emit pre-block content + drop the whole fenced block. Telemetry
@@ -654,7 +659,7 @@ def _strip_noisy_body_mermaid(
             distinct_verbs,
             max_pair_edges,
         )
-        out_parts.append(body[cursor:match.start()])
+        out_parts.append(body[cursor : match.start()])
         cursor = match.end()
     if cursor == 0:
         # No noisy block fired — return original body unchanged so we
@@ -771,7 +776,9 @@ def _suppress_empty_mermaid_modules(
         if rendered and _mermaid_block_has_no_edges(rendered):
             logger.info(
                 "module_suppressed reason=%s module=%s page_id=%s",
-                "mermaid_block_zero_edges", mid, page_id,
+                "mermaid_block_zero_edges",
+                mid,
+                page_id,
             )
             rendered_kept.pop(mid, None)
             continue
@@ -789,7 +796,7 @@ def _parse_compile_json(raw: str) -> dict[str, Any]:
     if text.startswith("```"):
         first_newline = text.find("\n")
         if first_newline != -1:
-            text = text[first_newline + 1:]
+            text = text[first_newline + 1 :]
         if text.endswith("```"):
             text = text[:-3]
         text = text.strip()
@@ -888,9 +895,7 @@ async def compile_topic_page_modular(
     # Decision/Tension/Folder/Channel-Overview archetypes get a
     # suggested section structure; Topic archetype gets the empty
     # string — sections come entirely from cluster content.
-    archetype_hint = get_archetype_hint_block(
-        str(signals.get("archetype") or "")
-    )
+    archetype_hint = get_archetype_hint_block(str(signals.get("archetype") or ""))
     prompt = build_module_compile_prompt_v3(
         signals=signals,
         module_catalog=catalog_view,
@@ -930,9 +935,7 @@ async def compile_topic_page_modular(
     try:
         parsed = _parse_compile_json(str(raw))
     except (ValueError, json.JSONDecodeError) as exc:
-        logger.warning(
-            "module_compile_parse_failed exc=%s raw_len=%d", exc, len(str(raw))
-        )
+        logger.warning("module_compile_parse_failed exc=%s raw_len=%d", exc, len(str(raw)))
         # Parse failure means the narrative payload is also lost —
         # surface a structured fallback log line so soak telemetry
         # sees the cause.
@@ -978,9 +981,7 @@ async def compile_topic_page_modular(
             facts=top_facts,
         )
     except Exception as exc:  # noqa: BLE001 — validator must never crash render
-        logger.exception(
-            "narrative_validator_unhandled_exception exc=%s", exc
-        )
+        logger.exception("narrative_validator_unhandled_exception exc=%s", exc)
         narrative_sections_clean = []
         narrative_telemetry = {
             "rejected": True,
@@ -1030,7 +1031,10 @@ async def compile_topic_page_modular(
     # rendered SUBSTANCE so we don't ship a 1-child subpage_cards or
     # an entity_diagram dominated by one (source, target) pair.
     plan = _suppress_thin_modules(
-        plan, signals, render_inputs, page_id=str(render_inputs.get("page_id") or "<unknown>"),
+        plan,
+        signals,
+        render_inputs,
+        page_id=str(render_inputs.get("page_id") or "<unknown>"),
     )
     if plan.is_empty():
         logger.info("module_compile_plan_empty_fallback — using key_facts only")
@@ -1055,7 +1059,8 @@ async def compile_topic_page_modular(
                 "module_render_inputs_missing module=%s missing_keys=%s — "
                 "module will render empty; gather step likely needs to "
                 "populate these keys",
-                mid, missing,
+                mid,
+                missing,
             )
         data = _per_module_data(mid, render_inputs)
         rendered = _render_python_module(mid, data)
@@ -1107,7 +1112,9 @@ async def compile_topic_page_modular(
     # BEFORE substitution (so the dropped marker is left in the body
     # and the substitution pass treats it as a stripped placeholder).
     plan, rendered_modules = _suppress_empty_mermaid_modules(
-        plan, rendered_modules, page_id=str(render_inputs.get("page_id") or "<unknown>"),
+        plan,
+        rendered_modules,
+        page_id=str(render_inputs.get("page_id") or "<unknown>"),
     )
     rendered_count = len(rendered_modules)
 
@@ -1129,9 +1136,7 @@ async def compile_topic_page_modular(
     # that the LLM left in the body but whose content is rendered by
     # the React dispatcher (so they appear empty in markdown).
     page_id_for_cleanup = str(render_inputs.get("page_id") or "<unknown>")
-    substituted_body = _strip_noisy_body_mermaid(
-        substituted_body, page_id=page_id_for_cleanup
-    )
+    substituted_body = _strip_noisy_body_mermaid(substituted_body, page_id=page_id_for_cleanup)
     substituted_body = _strip_empty_frontend_section_headers(
         substituted_body, page_id=page_id_for_cleanup
     )
@@ -1190,12 +1195,9 @@ def _fallback_folder_output(
     from beever_atlas.wiki.modules.folder_stats import build_folder_stats_data
     from beever_atlas.wiki.modules.hero_summary import build_hero_summary_data
 
-    fallback_tldr = (
-        f"**{folder_title} — folder containing {len(descendants)} pages.**"
-    )
+    fallback_tldr = f"**{folder_title} — folder containing {len(descendants)} pages.**"
     fallback_summary = (
-        f"Wayfinding index for the {len(descendants)} descendant pages "
-        f"under {folder_title}."
+        f"Wayfinding index for the {len(descendants)} descendant pages under {folder_title}."
     )
     modules: list[dict[str, Any]] = [
         {
@@ -1219,11 +1221,13 @@ def _fallback_folder_output(
         },
     ]
     if int(signals.get("child_count") or 0) >= 2:
-        modules.append({
-            "id": "folder_stats",
-            "anchor": "folder-stats",
-            "data": build_folder_stats_data(descendants),
-        })
+        modules.append(
+            {
+                "id": "folder_stats",
+                "anchor": "folder-stats",
+                "data": build_folder_stats_data(descendants),
+            }
+        )
     return ModularPageOutput(
         content=f"{fallback_tldr}\n\n{fallback_summary}",
         summary=fallback_summary,
@@ -1347,6 +1351,7 @@ async def compile_folder_page_modular(
     top_contributors_for_prompt = contributors_data.get("items", [])
     decisions_data = build_cross_cutting_decisions_data(descendants)
     top_decisions_for_prompt = decisions_data.get("items", [])
+
     # Top facts surface = highest-importance facts across descendants,
     # capped at 12 to keep prompt tokens manageable. ``importance`` /
     # ``quality_score`` order with a fallback to position.
@@ -1357,9 +1362,7 @@ async def compile_folder_page_modular(
                 return float(v)
         return 0.0
 
-    top_facts_for_prompt = sorted(
-        aggregated_facts, key=_fact_score, reverse=True
-    )[:12]
+    top_facts_for_prompt = sorted(aggregated_facts, key=_fact_score, reverse=True)[:12]
 
     # ── Stage 2 — single LLM call.
     catalog_view = _folder_catalog_view()
@@ -1413,9 +1416,7 @@ async def compile_folder_page_modular(
             facts=top_facts_for_prompt,
         )
     except Exception as exc:  # noqa: BLE001 — validator must never crash render
-        logger.exception(
-            "narrative_validator_unhandled_exception_folder exc=%s", exc
-        )
+        logger.exception("narrative_validator_unhandled_exception_folder exc=%s", exc)
         narrative_sections_clean = []
         narrative_telemetry = {
             "rejected": True,

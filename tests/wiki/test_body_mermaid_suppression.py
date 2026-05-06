@@ -74,14 +74,7 @@ def test_noisy_mermaid_one_pair_one_verb_is_stripped(orch_logs):
     """Same source/target pair across many edges + only one verb =
     noise. The whole fenced block must be dropped + telemetry logged."""
     edges = "\n".join("  A -->|owns| B" for _ in range(12))
-    body = (
-        "Prose before.\n\n"
-        "```mermaid\n"
-        "graph TD\n"
-        f"{edges}\n"
-        "```\n\n"
-        "Prose after.\n"
-    )
+    body = f"Prose before.\n\n```mermaid\ngraph TD\n{edges}\n```\n\nProse after.\n"
     out = _strip_noisy_body_mermaid(body, page_id="test-page")
 
     # Mermaid block gone, surrounding prose kept.
@@ -90,9 +83,7 @@ def test_noisy_mermaid_one_pair_one_verb_is_stripped(orch_logs):
     assert "Prose after." in out
     # Structured telemetry emitted.
     assert any(
-        "body_mermaid_suppressed" in m
-        and "dominant_pair_one_verb" in m
-        and "test-page" in m
+        "body_mermaid_suppressed" in m and "dominant_pair_one_verb" in m and "test-page" in m
         for m in orch_logs
     ), f"no matching log among {orch_logs}"
 
@@ -100,35 +91,20 @@ def test_noisy_mermaid_one_pair_one_verb_is_stripped(orch_logs):
 def test_empty_mermaid_block_is_stripped(orch_logs):
     """A mermaid block with no ``-->`` edges is structureless and gets
     stripped just like noisy blocks."""
-    body = (
-        "Header.\n\n"
-        "```mermaid\n"
-        "graph TD\n"
-        "  A\n"
-        "  B\n"
-        "```\n\n"
-        "Footer.\n"
-    )
+    body = "Header.\n\n```mermaid\ngraph TD\n  A\n  B\n```\n\nFooter.\n"
     out = _strip_noisy_body_mermaid(body, page_id="empty-test")
     assert "```mermaid" not in out
     assert "Header." in out
     assert "Footer." in out
-    assert any(
-        "body_mermaid_suppressed" in m and "no_edges" in m for m in orch_logs
-    ), f"no matching log among {orch_logs}"
+    assert any("body_mermaid_suppressed" in m and "no_edges" in m for m in orch_logs), (
+        f"no matching log among {orch_logs}"
+    )
 
 
 def test_non_mermaid_code_blocks_are_left_alone():
     """Code blocks fenced as e.g. ``python`` must be preserved verbatim
     — the rule only applies to ``mermaid``-tagged blocks."""
-    body = (
-        "Pre.\n\n"
-        "```python\n"
-        "# this is a code block, not mermaid\n"
-        "x = 1\n"
-        "```\n\n"
-        "Post.\n"
-    )
+    body = "Pre.\n\n```python\n# this is a code block, not mermaid\nx = 1\n```\n\nPost.\n"
     out = _strip_noisy_body_mermaid(body, page_id="code-test")
     # Original ```python block must survive untouched.
     assert "```python" in out
@@ -141,26 +117,14 @@ def test_clean_block_with_no_labels_kept_when_pair_count_low():
     """Mermaid block with unlabelled edges between many distinct pairs
     is structurally clean (not the dominant-pair noise pattern) so it
     must be kept even though distinct_verbs == 0."""
-    body = (
-        "```mermaid\n"
-        "graph TD\n"
-        "  A --> B\n"
-        "  C --> D\n"
-        "  E --> F\n"
-        "```\n"
-    )
+    body = "```mermaid\ngraph TD\n  A --> B\n  C --> D\n  E --> F\n```\n"
     out = _strip_noisy_body_mermaid(body, page_id="t")
     assert "```mermaid" in out
     assert "A --> B" in out
 
 
 def test_analyze_helper_counts_pairs_correctly():
-    inner = (
-        "graph TD\n"
-        "  A -->|uses| B\n"
-        "  A -->|investigates| B\n"
-        "  A -->|owns| B\n"
-    )
+    inner = "graph TD\n  A -->|uses| B\n  A -->|investigates| B\n  A -->|owns| B\n"
     total, distinct, max_pair = _analyze_mermaid_block(inner)
     assert total == 3
     assert distinct == 3

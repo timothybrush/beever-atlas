@@ -72,7 +72,7 @@ def test_prompt_demotion_guidance_for_unknown_resources() -> None:
     importance to 'low' rather than fabricate context."""
     # Locate the demotion guidance — match flexibly on key tokens
     text = FACT_EXTRACTOR_INSTRUCTION
-    assert 'importance' in text and '"low"' in text
+    assert "importance" in text and '"low"' in text
     assert "Do NOT fabricate" in text
 
 

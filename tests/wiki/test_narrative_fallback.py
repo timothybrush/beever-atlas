@@ -52,13 +52,26 @@ def _render_inputs() -> dict:
     return {
         "facts": [
             {"memory_text": "Adopted Authlib for OIDC.", "fact_type": "decision", "importance": 8},
-            {"memory_text": "Authlib supports OIDC discovery.", "fact_type": "claim", "importance": 7},
+            {
+                "memory_text": "Authlib supports OIDC discovery.",
+                "fact_type": "claim",
+                "importance": 7,
+            },
             {"memory_text": "Replaces Authlib-free path.", "fact_type": "claim", "importance": 6},
-            {"memory_text": "OIDC is a federation standard.", "fact_type": "claim", "importance": 5},
+            {
+                "memory_text": "OIDC is a federation standard.",
+                "fact_type": "claim",
+                "importance": 5,
+            },
             {"memory_text": "Migration completed Apr 2026.", "fact_type": "event", "importance": 6},
         ],
         "decisions": [
-            {"decision": "Adopt Authlib", "status": "active", "made_by": "Alice", "date": "2026-04-15"},
+            {
+                "decision": "Adopt Authlib",
+                "status": "active",
+                "made_by": "Alice",
+                "date": "2026-04-15",
+            },
         ],
         "page_id": "topic:authlib-oidc",
     }
@@ -81,6 +94,7 @@ async def test_parse_error_falls_back_to_module_only() -> None:
     # logger directly. caplog doesn't reliably intercept loggers that
     # have custom handlers via the project's logging config.
     import logging
+
     captured: list[logging.LogRecord] = []
 
     class _ListHandler(logging.Handler):
@@ -92,6 +106,7 @@ async def test_parse_error_falls_back_to_module_only() -> None:
     orch_logger.addHandler(handler)
     orch_logger.setLevel(logging.INFO)
     try:
+
         async def garbage_llm(prompt: str) -> str:
             return "not-actually-json {{{ broken"
 
@@ -116,10 +131,9 @@ async def test_parse_error_falls_back_to_module_only() -> None:
     assert out.content
     # Structured fallback log line emitted.
     messages = [rec.getMessage() for rec in captured]
-    assert any(
-        "narrative_article_fallback" in m and "parse_error" in m
-        for m in messages
-    ), f"expected parse_error fallback log; got {messages}"
+    assert any("narrative_article_fallback" in m and "parse_error" in m for m in messages), (
+        f"expected parse_error fallback log; got {messages}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +146,7 @@ async def test_low_citation_coverage_rejects_narrative() -> None:
     """LLM returns valid JSON with mostly-uncited paragraphs → validator
     rejects → narrative_sections persisted as empty, page renders module-only."""
     import logging
+
     captured: list[logging.LogRecord] = []
 
     class _ListHandler(logging.Handler):
@@ -198,9 +213,9 @@ async def test_low_citation_coverage_rejects_narrative() -> None:
     assert out.narrative_telemetry.get("rejected") is True
     # Structured fallback log emitted.
     messages = [rec.getMessage() for rec in captured]
-    assert any(
-        "narrative_article_fallback" in m for m in messages
-    ), f"expected at least one narrative_article_fallback log; got {messages}"
+    assert any("narrative_article_fallback" in m for m in messages), (
+        f"expected at least one narrative_article_fallback log; got {messages}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -221,13 +236,15 @@ async def test_v3_prompt_always_invoked() -> None:
     async def capturing_llm(prompt: str) -> str:
         received_prompts.append(prompt)
         # Return the minimum valid v3 response so parse succeeds.
-        return json.dumps({
-            "plan": {"modules": [{"id": "key_facts", "anchor": "kf"}]},
-            "tldr": "**X.**",
-            "overview": "Y.",
-            "narrative_sections": [],
-            "body": "<<MODULE:key_facts>>",
-        })
+        return json.dumps(
+            {
+                "plan": {"modules": [{"id": "key_facts", "anchor": "kf"}]},
+                "tldr": "**X.**",
+                "overview": "Y.",
+                "narrative_sections": [],
+                "body": "<<MODULE:key_facts>>",
+            }
+        )
 
     out = await compile_topic_page_modular(
         title="X",
@@ -265,6 +282,7 @@ async def test_parse_error_fallback_emits_metrics_line() -> None:
     OFF" from "v3 path crashed".
     """
     import logging
+
     captured: list[logging.LogRecord] = []
 
     class _ListHandler(logging.Handler):
@@ -276,6 +294,7 @@ async def test_parse_error_fallback_emits_metrics_line() -> None:
     orch_logger.addHandler(handler)
     orch_logger.setLevel(logging.INFO)
     try:
+
         async def garbage_llm(prompt: str) -> str:
             return "definitely not json {{{"
 
@@ -293,10 +312,9 @@ async def test_parse_error_fallback_emits_metrics_line() -> None:
 
     messages = [rec.getMessage() for rec in captured]
     # Fallback log line is required.
-    assert any(
-        "narrative_article_fallback" in m and "parse_error" in m
-        for m in messages
-    ), f"missing parse_error fallback log; got {messages}"
+    assert any("narrative_article_fallback" in m and "parse_error" in m for m in messages), (
+        f"missing parse_error fallback log; got {messages}"
+    )
     # Metrics log line is required (H-8).
     assert any(
         "narrative_article_metrics" in m
@@ -304,10 +322,7 @@ async def test_parse_error_fallback_emits_metrics_line() -> None:
         and "rejected=True" in m
         and "section_count=0" in m
         for m in messages
-    ), (
-        "missing narrative_article_metrics line on parse-error path; "
-        f"got {messages}"
-    )
+    ), f"missing narrative_article_metrics line on parse-error path; got {messages}"
 
 
 @pytest.mark.asyncio
@@ -316,6 +331,7 @@ async def test_llm_error_fallback_emits_metrics_line() -> None:
     orchestrator should still emit fallback + metrics lines so the
     dashboard can aggregate llm-error fallback rate."""
     import logging
+
     captured: list[logging.LogRecord] = []
 
     class _ListHandler(logging.Handler):
@@ -327,6 +343,7 @@ async def test_llm_error_fallback_emits_metrics_line() -> None:
     orch_logger.addHandler(handler)
     orch_logger.setLevel(logging.INFO)
     try:
+
         async def crashing_llm(prompt: str) -> str:
             raise RuntimeError("simulated llm crash")
 
@@ -343,11 +360,9 @@ async def test_llm_error_fallback_emits_metrics_line() -> None:
         orch_logger.removeHandler(handler)
 
     messages = [rec.getMessage() for rec in captured]
-    assert any(
-        "narrative_article_fallback" in m and "llm_error" in m
-        for m in messages
-    ), f"missing llm_error fallback log; got {messages}"
-    assert any(
-        "narrative_article_metrics" in m and "llm_error" in m
-        for m in messages
-    ), f"missing metrics line on llm-error path; got {messages}"
+    assert any("narrative_article_fallback" in m and "llm_error" in m for m in messages), (
+        f"missing llm_error fallback log; got {messages}"
+    )
+    assert any("narrative_article_metrics" in m and "llm_error" in m for m in messages), (
+        f"missing metrics line on llm-error path; got {messages}"
+    )

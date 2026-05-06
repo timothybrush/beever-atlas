@@ -6,6 +6,7 @@ extraction enrichment hasn't shipped). The placeholder fields
 (``rationale``, ``alternatives_rejected``, ``consequences_open``)
 emit ``null`` / ``[]`` so the schema is forward-compatible.
 """
+
 from __future__ import annotations
 
 from beever_atlas.wiki.modules.decision_banner import (
@@ -450,7 +451,12 @@ def test_compute_signals_exposes_archetype_string() -> None:
     signals = compute_signals(cluster=cluster, decisions=[{"text": "adopt CLA"}])
     assert "archetype" in signals
     assert signals["archetype"] in {
-        "topic", "decision", "resource", "person", "tension", "folder",
+        "topic",
+        "decision",
+        "resource",
+        "person",
+        "tension",
+        "folder",
     }
 
 

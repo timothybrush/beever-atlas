@@ -281,9 +281,7 @@ def test_compute_signals_glossary_zero_when_not_passed() -> None:
     rather than raising."""
     from beever_atlas.wiki.modules.planner import compute_signals
 
-    signals = compute_signals(
-        cluster={"title": "T", "member_facts": [{"memory_text": "MFA used"}]}
-    )
+    signals = compute_signals(cluster={"title": "T", "member_facts": [{"memory_text": "MFA used"}]})
     assert signals["glossary_terms_used"] == 0
 
 

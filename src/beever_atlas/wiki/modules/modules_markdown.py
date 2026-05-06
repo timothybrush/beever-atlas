@@ -158,9 +158,7 @@ def _decision_banner(data: dict[str, Any]) -> str:
         return ""
     body = _str(data.get("body"))
     decided_by = data.get("decided_by") or {}
-    decided_by_name = _str(
-        decided_by.get("name") if isinstance(decided_by, dict) else decided_by
-    )
+    decided_by_name = _str(decided_by.get("name") if isinstance(decided_by, dict) else decided_by)
     decided_at = _str(data.get("decided_at"))
     rationale = _str(data.get("rationale"))
     alternatives = data.get("alternatives_rejected") or []

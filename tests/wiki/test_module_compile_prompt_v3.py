@@ -242,10 +242,7 @@ def test_archetype_hint_block_channel_overview() -> None:
 
 def test_archetype_hint_block_overview_alias_matches_channel_overview() -> None:
     """``overview`` archetype value resolves to the same hint as ``channel_overview``."""
-    assert (
-        get_archetype_hint_block("overview")
-        == get_archetype_hint_block("channel_overview")
-    )
+    assert get_archetype_hint_block("overview") == get_archetype_hint_block("channel_overview")
 
 
 def test_archetype_hint_block_topic_returns_empty() -> None:

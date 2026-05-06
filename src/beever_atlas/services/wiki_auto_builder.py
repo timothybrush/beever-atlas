@@ -115,9 +115,7 @@ async def maybe_trigger_initial_build(
         #    "failed"; we never auto-retry to avoid loops on persistent
         #    LLM errors.
         try:
-            status = await cache.get_generation_status(
-                channel_id, target_lang=resolved_lang
-            )
+            status = await cache.get_generation_status(channel_id, target_lang=resolved_lang)
         except Exception as exc:  # noqa: BLE001 — never block the worker
             logger.warning(
                 "wiki_auto_initial_build: get_generation_status failed channel=%s err=%s",
@@ -131,9 +129,7 @@ async def maybe_trigger_initial_build(
         # 2. A wiki already exists → not a first-build situation. Hand off
         #    to the incremental maintainer.
         try:
-            existing = await cache.get_wiki(
-                channel_id, target_lang=resolved_lang
-            )
+            existing = await cache.get_wiki(channel_id, target_lang=resolved_lang)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "wiki_auto_initial_build: get_wiki failed channel=%s err=%s",

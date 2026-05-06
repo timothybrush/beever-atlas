@@ -7,6 +7,7 @@ contract. Coverage includes:
   - Empty fallback: no tension detected → builder returns empty shape
     so the React component renders ``null``.
 """
+
 from __future__ import annotations
 
 from beever_atlas.wiki.modules.tension_callout import (

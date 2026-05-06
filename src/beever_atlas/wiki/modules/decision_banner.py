@@ -45,7 +45,7 @@ def _split_sentence(text: str) -> tuple[str, str]:
     m = _FIRST_SENTENCE_RE.match(s)
     if m:
         first = m.group(1).strip()
-        rest = s[m.end():].strip()
+        rest = s[m.end() :].strip()
     else:
         # No sentence terminator found — treat the whole text as one
         # sentence with no body.
@@ -202,11 +202,7 @@ def build_decision_banner_data(
     )
     headline, rest = _split_sentence(body_text)
 
-    fact_id = str(
-        decision_fact.get("fact_id")
-        or decision_fact.get("id")
-        or ""
-    )
+    fact_id = str(decision_fact.get("fact_id") or decision_fact.get("id") or "")
     author_name = str(
         decision_fact.get("author_name")
         or decision_fact.get("user_name")
@@ -221,11 +217,7 @@ def build_decision_banner_data(
             or ""
         )
     )
-    permalink = str(
-        decision_fact.get("permalink")
-        or decision_fact.get("source_url")
-        or ""
-    )
+    permalink = str(decision_fact.get("permalink") or decision_fact.get("source_url") or "")
 
     # Phase 3 fields — read from structured extraction. The fields
     # default to None / [] for pre-Phase-3 documents so the renderer

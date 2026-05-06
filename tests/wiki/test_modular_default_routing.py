@@ -58,8 +58,14 @@ def _make_22_facts() -> list[dict[str, Any]]:
 def _no_safety_marker_anywhere(payload: Any) -> tuple[bool, str]:
     """Recursively walk a JSON-shaped payload and assert no safety
     marker substring appears. Returns (clean, where_failed)."""
-    SAFETY = ("<untrusted>", "</untrusted>", "<sanitized>", "</sanitized>",
-              "<external>", "</external>")
+    SAFETY = (
+        "<untrusted>",
+        "</untrusted>",
+        "<sanitized>",
+        "</sanitized>",
+        "<external>",
+        "</external>",
+    )
     if isinstance(payload, str):
         for tag in SAFETY:
             if tag in payload:
@@ -337,6 +343,5 @@ async def test_modular_path_runs_at_and_above_subpage_threshold(
     by_id = {m["id"]: m for m in out.modules}
     assert "key_facts" in by_id
     assert by_id["key_facts"]["data"]["renderer_kind"] == "frontend", (
-        f"fact_count={fact_count}: key_facts must stay frontend renderer "
-        "regardless of cluster size"
+        f"fact_count={fact_count}: key_facts must stay frontend renderer regardless of cluster size"
     )

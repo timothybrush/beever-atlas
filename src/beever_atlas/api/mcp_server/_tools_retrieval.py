@@ -889,9 +889,7 @@ def register_retrieval_tools(mcp: FastMCP) -> None:
 
             stores = get_stores()
             page_store = WikiPageStore(db=stores.mongodb.db)
-            page = await page_store.get_page_by_slug(
-                channel_id, page_slug, target_lang=target_lang
-            )
+            page = await page_store.get_page_by_slug(channel_id, page_slug, target_lang=target_lang)
             if page is None:
                 return {"error": "wiki_page_not_found", "slug": page_slug}
             for module in page.modules or []:
@@ -1120,9 +1118,7 @@ def register_retrieval_tools(mcp: FastMCP) -> None:
                             since = since[:10]
                         tensions.append(
                             {
-                                "tension_id": item.get("tension_id")
-                                or item.get("id")
-                                or "",
+                                "tension_id": item.get("tension_id") or item.get("id") or "",
                                 "title": item.get("title") or item.get("summary") or "",
                                 "status": tension_status,
                                 "since": since,
@@ -1318,9 +1314,7 @@ def register_retrieval_tools(mcp: FastMCP) -> None:
 
             stores = get_stores()
             page_store = WikiPageStore(db=stores.mongodb.db)
-            page = await page_store.get_page_by_slug(
-                channel_id, page_slug, target_lang=target_lang
-            )
+            page = await page_store.get_page_by_slug(channel_id, page_slug, target_lang=target_lang)
             if page is None:
                 return {
                     "error": "page_not_found",
@@ -1441,9 +1435,7 @@ def register_retrieval_tools(mcp: FastMCP) -> None:
                 "source": {
                     "platform": fact.platform or "",
                     "message_id": fact.source_message_id or "",
-                    "url": (fact.source_link_urls or [""])[0]
-                    if fact.source_link_urls
-                    else "",
+                    "url": (fact.source_link_urls or [""])[0] if fact.source_link_urls else "",
                     "author": fact.author_name or "",
                     "ts": fact.message_ts or "",
                 },

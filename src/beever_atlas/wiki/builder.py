@@ -275,8 +275,7 @@ class WikiBuilder:
                         fact_graph=None,
                     )
                     logger.info(
-                        "wiki_folder_planner_result channel=%s folders=%d "
-                        "leaves=%d fallback=%s",
+                        "wiki_folder_planner_result channel=%s folders=%d leaves=%d fallback=%s",
                         channel_id,
                         len(plan.folders),
                         len(plan.leaves),
@@ -306,8 +305,7 @@ class WikiBuilder:
                         )
             except Exception:  # noqa: BLE001 — planner is best-effort
                 logger.exception(
-                    "wiki_folder_planner_unhandled channel=%s — falling back "
-                    "to flat structure",
+                    "wiki_folder_planner_unhandled channel=%s — falling back to flat structure",
                     channel_id,
                 )
 

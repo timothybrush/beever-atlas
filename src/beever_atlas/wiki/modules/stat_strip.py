@@ -59,27 +59,90 @@ _PLAIN_INT_RE = re.compile(r"\b\d{3,}\b")
 # would otherwise produce label "across the campaign" if we matched
 # greedily; we want "actions").
 _LABEL_STOPWORDS = {
-    "of", "in", "on", "for", "to", "from", "by", "with", "across",
-    "the", "a", "an", "this", "that", "these", "those", "his",
-    "her", "their", "its", "our", "my", "your",
+    "of",
+    "in",
+    "on",
+    "for",
+    "to",
+    "from",
+    "by",
+    "with",
+    "across",
+    "the",
+    "a",
+    "an",
+    "this",
+    "that",
+    "these",
+    "those",
+    "his",
+    "her",
+    "their",
+    "its",
+    "our",
+    "my",
+    "your",
 }
 
 # Words that disqualify a noun match — these are dates / times /
 # generic words that surface from regex hits but aren't useful as
 # stat labels.
 _LABEL_BLOCKLIST = {
-    "am", "pm", "gmt", "utc",
-    "mon", "tue", "wed", "thu", "fri", "sat", "sun",
-    "monday", "tuesday", "wednesday", "thursday", "friday",
-    "saturday", "sunday",
-    "jan", "feb", "mar", "apr", "may", "jun",
-    "jul", "aug", "sep", "oct", "nov", "dec",
-    "january", "february", "march", "april",
-    "june", "july", "august", "september",
-    "october", "november", "december",
-    "year", "years", "month", "months", "week", "weeks",
-    "day", "days", "hour", "hours", "minute", "minutes",
-    "second", "seconds",
+    "am",
+    "pm",
+    "gmt",
+    "utc",
+    "mon",
+    "tue",
+    "wed",
+    "thu",
+    "fri",
+    "sat",
+    "sun",
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+    "january",
+    "february",
+    "march",
+    "april",
+    "june",
+    "july",
+    "august",
+    "september",
+    "october",
+    "november",
+    "december",
+    "year",
+    "years",
+    "month",
+    "months",
+    "week",
+    "weeks",
+    "day",
+    "days",
+    "hour",
+    "hours",
+    "minute",
+    "minutes",
+    "second",
+    "seconds",
 }
 
 
@@ -94,7 +157,7 @@ def _coerce_raw_value(value: str) -> float | None:
     # Strip currency prefix.
     for prefix in ("HK$", "US$", "$", "£", "€"):
         if s.startswith(prefix):
-            s = s[len(prefix):]
+            s = s[len(prefix) :]
             break
     s = s.replace(",", "")
     multiplier = 1.0
@@ -119,7 +182,7 @@ def _extract_label(text: str, start: int, end: int) -> str:
     if end >= len(text):
         return ""
     # Take a window after the match for word extraction.
-    window = text[end:end + 60]
+    window = text[end : end + 60]
     # Match up to 3 word-tokens — alpha characters + optional
     # internal hyphen/apostrophe (e.g., "open-rate", "user's").
     words = re.findall(r"[A-Za-z][A-Za-z'\-]*", window)
@@ -183,12 +246,7 @@ def count_numeric_facts(facts: list[dict] | None) -> int:
     for f in facts:
         if not isinstance(f, dict):
             continue
-        body = _strip_safety_markers(
-            f.get("memory_text")
-            or f.get("fact")
-            or f.get("text")
-            or ""
-        )
+        body = _strip_safety_markers(f.get("memory_text") or f.get("fact") or f.get("text") or "")
         if _has_numeric_match(body):
             n += 1
     return n
@@ -224,12 +282,7 @@ def _date_range_from_facts(facts: list[dict]) -> dict[str, str]:
     for f in facts:
         if not isinstance(f, dict):
             continue
-        ts = (
-            f.get("message_ts")
-            or f.get("timestamp")
-            or f.get("date")
-            or ""
-        )
+        ts = f.get("message_ts") or f.get("timestamp") or f.get("date") or ""
         if not ts:
             continue
         # ISO prefix only (10 chars). Lexical order matches calendar
@@ -324,9 +377,7 @@ def build_stat_strip_data(facts: list[dict] | None) -> dict[str, Any]:
         }
 
     # ---- Phase 3 structured-first path -------------------------------
-    structured = _collect_structured_numerics(
-        [f for f in facts if isinstance(f, dict)]
-    )
+    structured = _collect_structured_numerics([f for f in facts if isinstance(f, dict)])
     if structured:
         seen: set[tuple[str, str]] = set()
         deduped: list[dict[str, Any]] = []
@@ -342,9 +393,14 @@ def build_stat_strip_data(facts: list[dict] | None) -> dict[str, Any]:
                 contributing.append(src)
             if len(deduped) >= _MAX_STATS:
                 break
-        period = _date_range_from_facts(contributing) if contributing else {
-            "from": "", "to": "",
-        }
+        period = (
+            _date_range_from_facts(contributing)
+            if contributing
+            else {
+                "from": "",
+                "to": "",
+            }
+        )
         return {
             "label": "Stats",
             "renderer_kind": "frontend",
@@ -379,12 +435,7 @@ def build_stat_strip_data(facts: list[dict] | None) -> dict[str, Any]:
     contributing_facts: list[dict] = []
 
     for f in sorted_facts:
-        body = _strip_safety_markers(
-            f.get("memory_text")
-            or f.get("fact")
-            or f.get("text")
-            or ""
-        )
+        body = _strip_safety_markers(f.get("memory_text") or f.get("fact") or f.get("text") or "")
         if not body:
             continue
         fact_id = str(f.get("fact_id") or f.get("id") or "")
@@ -416,9 +467,14 @@ def build_stat_strip_data(facts: list[dict] | None) -> dict[str, Any]:
         if len(stats) >= _MAX_STATS:
             break
 
-    period = _date_range_from_facts(contributing_facts) if contributing_facts else {
-        "from": "", "to": "",
-    }
+    period = (
+        _date_range_from_facts(contributing_facts)
+        if contributing_facts
+        else {
+            "from": "",
+            "to": "",
+        }
+    )
 
     return {
         "label": "Stats",

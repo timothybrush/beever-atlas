@@ -227,8 +227,16 @@ def _build_render_inputs() -> dict:
         "relationships": _SYNTHETIC_RELATIONSHIPS,
         "open_questions": _SYNTHETIC_OPEN_QUESTIONS,
         "related_topics": [
-            {"title": "Rate limiting strategy", "slug": "topic-rate-limiting", "reason": "shares Auth Service entity"},
-            {"title": "Audit logging", "slug": "topic-audit-logging", "reason": "shares contributor Alice"},
+            {
+                "title": "Rate limiting strategy",
+                "slug": "topic-rate-limiting",
+                "reason": "shares Auth Service entity",
+            },
+            {
+                "title": "Audit logging",
+                "slug": "topic-audit-logging",
+                "reason": "shares contributor Alice",
+            },
         ],
         "media": _SYNTHETIC_MEDIA,
     }
@@ -413,6 +421,7 @@ async def test_e2e_no_private_data_in_module_payloads() -> None:
     """Privacy guard: assert NO real channel/user/URL data appears in
     the persisted module payloads. All values trace back to the
     synthetic fixtures defined at the top of this file."""
+
     async def stub_llm(prompt: str) -> str:
         return _stub_llm_response()
 

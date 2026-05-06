@@ -69,7 +69,12 @@ def _render_inputs_for_test() -> dict:
         ],
         "decisions": [
             {"decision": "Adopt JWT", "status": "active", "made_by": "Jacky", "date": "2026-04-15"},
-            {"decision": "Drop SAML", "status": "active", "made_by": "Thomas", "date": "2026-04-15"},
+            {
+                "decision": "Drop SAML",
+                "status": "active",
+                "made_by": "Thomas",
+                "date": "2026-04-15",
+            },
             {"decision": "24h TTL", "status": "pending", "made_by": "Alan", "date": "2026-04-20"},
         ],
         "entities": [

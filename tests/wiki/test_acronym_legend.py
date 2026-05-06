@@ -150,9 +150,9 @@ def test_build_preserves_definition_and_first_mentioned_by() -> None:
 def test_build_handles_empty_inputs() -> None:
     assert build_acronym_legend_data(None, None)["items"] == []  # type: ignore[arg-type]
     assert build_acronym_legend_data([], [])["items"] == []
-    assert build_acronym_legend_data(
-        [{"term": "MFA"}], []
-    )["items"] == []  # no facts → nothing matched
+    assert (
+        build_acronym_legend_data([{"term": "MFA"}], [])["items"] == []
+    )  # no facts → nothing matched
 
 
 def test_build_dedupes_terms_by_lowercase() -> None:

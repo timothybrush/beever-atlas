@@ -266,10 +266,7 @@ def _derive_media_kind(url: str, name: str, fallback: str) -> str:
         #   logo.png                                     (name)
         #   https://cdn.example/logo.png                 (url path)
         #   https://cdn.example/logo.png?token=abc       (url + query)
-        return any(
-            n.endswith(ext) or u.endswith(ext) or f"{ext}?" in u
-            for ext in exts
-        )
+        return any(n.endswith(ext) or u.endswith(ext) or f"{ext}?" in u for ext in exts)
 
     if _matches(_IMAGE_EXTS):
         return "image"
@@ -3391,7 +3388,11 @@ class WikiCompiler:
         decisions_data = list(getattr(cluster, "decisions", []) or [])
         # Entities + relationships from the cluster's knowledge-graph slice.
         entities_data = [
-            {"id": str(e.get("name") or e.get("id") or ""), "label": str(e.get("name") or ""), "kind": str(e.get("type") or "")}
+            {
+                "id": str(e.get("name") or e.get("id") or ""),
+                "label": str(e.get("name") or ""),
+                "kind": str(e.get("type") or ""),
+            }
             for e in (getattr(cluster, "key_entities", []) or [])
             if isinstance(e, dict)
         ]
@@ -3403,12 +3404,18 @@ class WikiCompiler:
         # an edge). Keep them in the underlying graph for other uses
         # but strip from the visual.
         _CONVERSATION_META_EDGES = {
-            "MENTIONS", "MENTIONED",
-            "ASKS", "ASKED",
-            "REPLIED_TO", "REPLIES_TO",
-            "ADDRESSES", "ADDRESSED",
-            "INFORMS", "INFORMED",
-            "EXPLAINS_TO", "EXPLAINED_TO",
+            "MENTIONS",
+            "MENTIONED",
+            "ASKS",
+            "ASKED",
+            "REPLIED_TO",
+            "REPLIES_TO",
+            "ADDRESSES",
+            "ADDRESSED",
+            "INFORMS",
+            "INFORMED",
+            "EXPLAINS_TO",
+            "EXPLAINED_TO",
         }
         relationships_data = [
             {
@@ -3439,12 +3446,14 @@ class WikiCompiler:
         for rid in getattr(cluster, "related_cluster_ids", []):
             for rc in all_clusters:
                 if rc.id == rid:
-                    related_topics_data.append({
-                        "title": rc.title,
-                        "slug": _slugify(rc.title) or rc.id,
-                        "reason": "shared entities or contributors",
-                        "score": 0.5,
-                    })
+                    related_topics_data.append(
+                        {
+                            "title": rc.title,
+                            "slug": _slugify(rc.title) or rc.id,
+                            "reason": "shared entities or contributors",
+                            "score": 0.5,
+                        }
+                    )
                     break
 
         # Glossary plumbing — surface the channel's glossary so the
@@ -3453,9 +3462,7 @@ class WikiCompiler:
         # list of strings; we coerce to dicts so the module's builder
         # has a uniform shape.
         channel_summary_obj = gathered.get("channel_summary")
-        raw_glossary = (
-            getattr(channel_summary_obj, "glossary_terms", None) or []
-        )
+        raw_glossary = getattr(channel_summary_obj, "glossary_terms", None) or []
         glossary_data: list[dict] = []
         for entry in raw_glossary:
             if isinstance(entry, dict):
@@ -3464,9 +3471,7 @@ class WikiCompiler:
                         "term": str(entry.get("term") or "").strip(),
                         "definition": str(entry.get("definition") or "").strip(),
                         "first_mentioned_by": str(
-                            entry.get("first_mentioned_by")
-                            or entry.get("author")
-                            or ""
+                            entry.get("first_mentioned_by") or entry.get("author") or ""
                         ).strip(),
                     }
                 )
@@ -3490,9 +3495,7 @@ class WikiCompiler:
             )
 
         render_inputs = {
-            "facts": [
-                {**f, "memory_text": f["memory_text"]} for f in facts_data
-            ],
+            "facts": [{**f, "memory_text": f["memory_text"]} for f in facts_data],
             "decisions": decisions_data,
             "entities": entities_data,
             "relationships": relationships_data,
@@ -3721,7 +3724,9 @@ class WikiCompiler:
         if member_facts:
             try:
                 modular_page = await self._try_compile_topic_modular(
-                    cluster, gathered, sorted_facts,
+                    cluster,
+                    gathered,
+                    sorted_facts,
                     sub_pages=sub_pages_for_parent or None,
                 )
                 if modular_page is not None:
@@ -3732,17 +3737,15 @@ class WikiCompiler:
                 logger.warning(
                     "modular_topic_compile_failed_falling_back_to_legacy "
                     "topic=%s exc_type=%s exc=%s",
-                    cluster.id, type(exc).__name__, exc,
+                    cluster.id,
+                    type(exc).__name__,
+                    exc,
                 )
             # Modular returned None (catastrophic fallback). Fall back to
             # the thin-topic legacy path for very small clusters so we
             # don't render an awkward 5-row table for a 2-fact page.
             # Only applies to clusters that didn't try the sub-page split.
-            if (
-                v2
-                and not sub_pages_for_parent
-                and len(member_facts) < _THIN_TOPIC_THRESHOLD
-            ):
+            if v2 and not sub_pages_for_parent and len(member_facts) < _THIN_TOPIC_THRESHOLD:
                 return await self._compile_thin_topic(cluster, gathered)
         facts_data = [
             {
@@ -3802,9 +3805,7 @@ class WikiCompiler:
                         technologies_json=json.dumps(cluster.technologies, default=str),
                         projects_json=json.dumps(cluster.projects, default=str),
                         key_entities_json=json.dumps(cluster.key_entities, default=str),
-                        key_relationships_json=json.dumps(
-                            cluster.key_relationships, default=str
-                        ),
+                        key_relationships_json=json.dumps(cluster.key_relationships, default=str),
                         member_facts_json=json.dumps(facts_data, default=str),
                         media_json=json.dumps(media_data, default=str),
                         related_topics_json=related_topics_json,
@@ -3813,9 +3814,7 @@ class WikiCompiler:
                     parent_content = parent_result.content
                     if v2:
                         parent_content = self._postprocess_content(parent_content)
-                        parent_content = _splice_key_facts_table(
-                            parent_content, cluster.key_facts
-                        )
+                        parent_content = _splice_key_facts_table(parent_content, cluster.key_facts)
                     children_refs = [
                         WikiPageRef(
                             id=sp.id,
@@ -4647,7 +4646,7 @@ class WikiCompiler:
         descendants_payload: list[dict[str, Any]] = []
         for c in children_pages:
             d_facts: list[dict[str, Any]] = []
-            for cit in (c.citations or []):
+            for cit in c.citations or []:
                 d_facts.append(
                     {
                         "fact_id": cit.id or "",
@@ -4667,14 +4666,14 @@ class WikiCompiler:
             # Promote decision facts from each child's persisted
             # ``modules`` (if the child was compiled via the modular
             # topic path, decision_log entries live there).
-            for mod in (c.modules or []):
+            for mod in c.modules or []:
                 if not isinstance(mod, dict):
                     continue
                 if mod.get("id") != "decision_log":
                     continue
                 inner = mod.get("data") or {}
                 if isinstance(inner, dict):
-                    for dec in (inner.get("decisions") or []):
+                    for dec in inner.get("decisions") or []:
                         if not isinstance(dec, dict):
                             continue
                         d_facts.append(
@@ -4728,9 +4727,7 @@ class WikiCompiler:
         # below so we don't ship a half-rendered dashboard.
         if modular_out is not None and not modular_out.fell_back:
             sorted_slugs = sorted(c.slug for c in children_pages if c.slug)
-            fingerprint = hashlib.sha256(
-                "\n".join(sorted_slugs).encode("utf-8")
-            ).hexdigest()
+            fingerprint = hashlib.sha256("\n".join(sorted_slugs).encode("utf-8")).hexdigest()
             from datetime import UTC as _UTC, datetime as _dt
 
             children_refs = [
@@ -4791,7 +4788,7 @@ class WikiCompiler:
         entities: list[str] = []
         seen: set[str] = set()
         for c in children_pages:
-            for cit in (c.citations or []):
+            for cit in c.citations or []:
                 for candidate in (cit.author, cit.media_name):
                     if not candidate:
                         continue
@@ -4856,9 +4853,7 @@ class WikiCompiler:
         # the maintainer (Phase E) to skip re-synthesis when membership
         # is unchanged.
         sorted_slugs = sorted(c.slug for c in children_pages if c.slug)
-        fingerprint = hashlib.sha256(
-            "\n".join(sorted_slugs).encode("utf-8")
-        ).hexdigest()
+        fingerprint = hashlib.sha256("\n".join(sorted_slugs).encode("utf-8")).hexdigest()
 
         # Page memory_count = sum of children memory counts (proxy for
         # "how much the folder represents"). Last_updated is now since

@@ -167,9 +167,7 @@ async def test_22_fact_cluster_renders_modular_not_legacy_gfm_table() -> None:
 
     # ``subpage_cards`` is present (3 children passed in — above the
     # singleton-suppression threshold of 1).
-    assert "subpage_cards" in by_id, (
-        "subpage_cards MUST fire when child_count >= 2"
-    )
+    assert "subpage_cards" in by_id, "subpage_cards MUST fire when child_count >= 2"
 
     # ``modules`` is non-empty — this is the contract ``TopicPage.tsx``
     # checks (``page.modules.length > 0``) before mounting the v2
@@ -302,9 +300,7 @@ async def test_singleton_subpage_cards_is_suppressed() -> None:
     )
 
     by_id = {m["id"]: m for m in out.modules}
-    assert "subpage_cards" not in by_id, (
-        "child_count == 1 should suppress subpage_cards"
-    )
+    assert "subpage_cards" not in by_id, "child_count == 1 should suppress subpage_cards"
 
 
 @pytest.mark.asyncio
@@ -435,7 +431,9 @@ async def test_try_compile_topic_modular_threads_subpages_through_signals() -> N
     # builders can walk parent → children.
     assert len(page.children) == 3
     assert {ch.title for ch in page.children} == {
-        "Sub-page 0", "Sub-page 1", "Sub-page 2",
+        "Sub-page 0",
+        "Sub-page 1",
+        "Sub-page 2",
     }
 
 
@@ -560,9 +558,7 @@ async def test_subpage_cards_fires_for_multiple_child_counts(child_count: int) -
     )
 
     by_id = {m["id"]: m for m in out.modules}
-    assert "subpage_cards" in by_id, (
-        f"child_count={child_count}: subpage_cards must fire (>=2)"
-    )
+    assert "subpage_cards" in by_id, f"child_count={child_count}: subpage_cards must fire (>=2)"
 
 
 @pytest.mark.parametrize("fact_count", [15, 25, 50])

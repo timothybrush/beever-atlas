@@ -360,9 +360,7 @@ async def _refresh_proxy_hosts(stores) -> None:
 
         await refresh_runtime_proxy_hosts(stores)
     except Exception:
-        logger.exception(
-            "connections: failed to refresh proxy host allowlist (non-fatal)"
-        )
+        logger.exception("connections: failed to refresh proxy host allowlist (non-fatal)")
 
 
 @router.delete("/api/connections/{connection_id}", status_code=204)

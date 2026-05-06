@@ -240,9 +240,9 @@ def _validate_section(
         forbidden = _paragraph_has_forbidden_phrase(paragraph)
         if forbidden is not None:
             logger.info(
-                "narrative_paragraph_dropped reason=activity_narration "
-                "phrase=%r section=%s",
-                forbidden, anchor,
+                "narrative_paragraph_dropped reason=activity_narration phrase=%r section=%s",
+                forbidden,
+                anchor,
             )
             paragraphs_dropped[0] += 1
             continue
@@ -250,14 +250,11 @@ def _validate_section(
         #    paragraphs MUST still cite (Decision 3 in the design doc).
         if _paragraph_is_uncited(paragraph):
             is_inf = bool(paragraph.get("is_inference"))
-            reason = (
-                "uncited_inference"
-                if is_inf
-                else "no_citations"
-            )
+            reason = "uncited_inference" if is_inf else "no_citations"
             logger.info(
                 "narrative_paragraph_dropped reason=%s section=%s",
-                reason, anchor,
+                reason,
+                anchor,
             )
             paragraphs_dropped[0] += 1
             continue
@@ -265,21 +262,18 @@ def _validate_section(
         # builder also normalises later, but doing it here keeps the
         # validator output independently consumable (e.g., by tests).
         citations_raw = paragraph.get("citations") or []
-        citations = [
-            str(c).strip()
-            for c in citations_raw
-            if isinstance(c, str) and c.strip()
-        ]
-        cleaned_paragraphs.append({
-            "text": text.strip(),
-            "citations": citations,
-            "is_inference": bool(paragraph.get("is_inference")),
-        })
+        citations = [str(c).strip() for c in citations_raw if isinstance(c, str) and c.strip()]
+        cleaned_paragraphs.append(
+            {
+                "text": text.strip(),
+                "citations": citations,
+                "is_inference": bool(paragraph.get("is_inference")),
+            }
+        )
 
     if not cleaned_paragraphs:
         logger.info(
-            "narrative_section_dropped reason=no_surviving_paragraphs "
-            "section=%s",
+            "narrative_section_dropped reason=no_surviving_paragraphs section=%s",
             anchor,
         )
         return None
@@ -303,7 +297,9 @@ def _validate_section(
     if section_words > _SECTION_SOFT_MAX_WORDS:
         logger.info(
             "narrative_section_over_cap section=%s words=%d cap=%d",
-            anchor, section_words, _SECTION_SOFT_MAX_WORDS,
+            anchor,
+            section_words,
+            _SECTION_SOFT_MAX_WORDS,
         )
         # Truncate the last paragraph so the section fits. We keep all
         # earlier paragraphs intact; this preserves citation coverage
@@ -331,14 +327,8 @@ def _validate_section(
             if c and c not in seen:
                 seen.add(c)
                 union_citations.append(c)
-    paragraphs_with_citations = sum(
-        1 for p in cleaned_paragraphs if p["citations"]
-    )
-    coverage = (
-        paragraphs_with_citations / len(cleaned_paragraphs)
-        if cleaned_paragraphs
-        else 0.0
-    )
+    paragraphs_with_citations = sum(1 for p in cleaned_paragraphs if p["citations"])
+    coverage = paragraphs_with_citations / len(cleaned_paragraphs) if cleaned_paragraphs else 0.0
 
     # 5. Pass through the visual untouched (the builder normalises it
     #    further; we keep the validator focused on text discipline).
@@ -420,16 +410,16 @@ def validate_narrative_sections(
             ):
                 cited_input_paragraphs += 1
     raw_coverage = (
-        cited_input_paragraphs / total_input_paragraphs
-        if total_input_paragraphs > 0
-        else 0.0
+        cited_input_paragraphs / total_input_paragraphs if total_input_paragraphs > 0 else 0.0
     )
     if total_input_paragraphs > 0 and raw_coverage < _CITATION_COVERAGE_GATE:
         logger.info(
             "narrative_article_rejected reason=low_citation_coverage "
             "raw_coverage=%.3f gate=%.2f cited=%d total=%d",
-            raw_coverage, _CITATION_COVERAGE_GATE,
-            cited_input_paragraphs, total_input_paragraphs,
+            raw_coverage,
+            _CITATION_COVERAGE_GATE,
+            cited_input_paragraphs,
+            total_input_paragraphs,
         )
         return [], {
             "rejected": True,
@@ -479,11 +469,7 @@ def validate_narrative_sections(
                 for c in p["citations"]:
                     distinct_facts.add(c)
 
-    article_coverage = (
-        paragraphs_with_citations / total_paragraphs
-        if total_paragraphs
-        else 0.0
-    )
+    article_coverage = paragraphs_with_citations / total_paragraphs if total_paragraphs else 0.0
 
     # Article-over-cap soft warning. Only egregious bloat (> hard max)
     # triggers a rejection so landmark pages (channel overview) can
@@ -491,7 +477,8 @@ def validate_narrative_sections(
     if total_words > _ARTICLE_HARD_MAX_WORDS:
         logger.warning(
             "narrative_article_over_hard_cap words=%d hard_max=%d — rejecting",
-            total_words, _ARTICLE_HARD_MAX_WORDS,
+            total_words,
+            _ARTICLE_HARD_MAX_WORDS,
         )
         return [], {
             "rejected": True,
@@ -504,7 +491,8 @@ def validate_narrative_sections(
     if total_words > _ARTICLE_TYPICAL_MAX_WORDS:
         logger.info(
             "narrative_article_over_cap words=%d typical_max=%d (soft cap)",
-            total_words, _ARTICLE_TYPICAL_MAX_WORDS,
+            total_words,
+            _ARTICLE_TYPICAL_MAX_WORDS,
         )
 
     # Citation-coverage gate — hard fail when below 80%. This is the
@@ -512,9 +500,9 @@ def validate_narrative_sections(
     # through the per-paragraph filter.
     if total_paragraphs > 0 and article_coverage < _CITATION_COVERAGE_GATE:
         logger.info(
-            "narrative_article_rejected reason=low_citation_coverage "
-            "coverage=%.3f gate=%.2f",
-            article_coverage, _CITATION_COVERAGE_GATE,
+            "narrative_article_rejected reason=low_citation_coverage coverage=%.3f gate=%.2f",
+            article_coverage,
+            _CITATION_COVERAGE_GATE,
         )
         return [], {
             "rejected": True,

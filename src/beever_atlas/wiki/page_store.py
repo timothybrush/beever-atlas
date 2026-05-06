@@ -398,9 +398,7 @@ class WikiPageStore:
                     upsert=True,
                 )
 
-    async def resolve_redirect(
-        self, channel_id: str, target_lang: str, path: str
-    ) -> str | None:
+    async def resolve_redirect(self, channel_id: str, target_lang: str, path: str) -> str | None:
         """Resolve a redirect chain to its latest target.
 
         Returns the latest known ``new_path`` for the given ``path``, or
@@ -530,9 +528,7 @@ class WikiPageStore:
         )
         return bool(result.deleted_count)
 
-    async def delete_all_for_channel(
-        self, channel_id: str, target_lang: str = "en"
-    ) -> int:
+    async def delete_all_for_channel(self, channel_id: str, target_lang: str = "en") -> int:
         """Bulk-delete every page row for ``(channel_id, target_lang)``.
 
         Used by the ``mode=rebuild`` path on POST /wiki/refresh to wipe

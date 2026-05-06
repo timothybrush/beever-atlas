@@ -104,13 +104,13 @@ def compute_signals(
     # event-typed facts. ``timeline`` module needs both ≥4 events AND
     # ≥14 days of spread.
     event_facts = [
-        f for f in facts
-        if isinstance(f, dict) and (f.get("fact_type") or "").lower() in {"event", "action", "decision"}
+        f
+        for f in facts
+        if isinstance(f, dict)
+        and (f.get("fact_type") or "").lower() in {"event", "action", "decision"}
     ]
     event_count = len(event_facts)
-    dates = sorted(
-        [str(f.get("date") or "")[:10] for f in event_facts if f.get("date")]
-    )
+    dates = sorted([str(f.get("date") or "")[:10] for f in event_facts if f.get("date")])
     if len(dates) >= 2:
         try:
             from datetime import date
@@ -147,9 +147,7 @@ def compute_signals(
     # ``to`` field (directed edge). Used to drop flow_chart modules
     # whose nodes are all isolated.
     process_step_edge_count = sum(
-        1
-        for step in process_steps
-        if isinstance(step, dict) and str(step.get("to") or "").strip()
+        1 for step in process_steps if isinstance(step, dict) and str(step.get("to") or "").strip()
     )
 
     # Strong-claim authors — distinct authors making opinion / decision
@@ -193,23 +191,26 @@ def compute_signals(
         heuristic_hero = bool(
             alt
             and title_lower
-            and (
-                alt in title_lower
-                or title_lower in alt
-                or len(shared_words) >= 2
-            )
+            and (alt in title_lower or title_lower in alt or len(shared_words) >= 2)
             and ref_count >= 3
         )
         if is_hero_explicit or heuristic_hero:
             media_by_kind["hero_candidate"].append(m)
             continue
         # Type buckets.
-        if kind in {"image", "screenshot"} or url.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+        if kind in {"image", "screenshot"} or url.endswith(
+            (".png", ".jpg", ".jpeg", ".gif", ".webp")
+        ):
             if m.get("source_fact_id"):
                 media_by_kind["inline"].append(m)
             else:
                 media_by_kind["gallery"].append(m)
-        elif kind == "video" or "youtube.com" in url or "vimeo.com" in url or url.endswith((".mp4", ".webm")):
+        elif (
+            kind == "video"
+            or "youtube.com" in url
+            or "vimeo.com" in url
+            or url.endswith((".mp4", ".webm"))
+        ):
             media_by_kind["video"].append(m)
         elif kind == "pdf" or url.endswith(".pdf"):
             media_by_kind["pdf"].append(m)
@@ -223,6 +224,7 @@ def compute_signals(
         from beever_atlas.wiki.modules.acronym_legend import (
             count_glossary_terms_used,
         )
+
         glossary_terms_used = count_glossary_terms_used(glossary, facts)
     else:
         glossary_terms_used = 0
@@ -264,10 +266,7 @@ def compute_signals(
             elif ft == "question":
                 descendant_question_count += 1
             name = str(
-                df.get("author_name")
-                or df.get("user_name")
-                or df.get("author")
-                or ""
+                df.get("author_name") or df.get("user_name") or df.get("author") or ""
             ).strip()
             if name:
                 distinct_contributor_set.add(name)
@@ -470,7 +469,8 @@ def _validate_plan(
         except Exception as exc:  # noqa: BLE001 — predicate must never block
             logger.warning(
                 "module_rejected reason=predicate_error module=%s exc=%s",
-                mid, exc,
+                mid,
+                exc,
             )
             continue
         if not eligible:
@@ -505,9 +505,7 @@ def _validate_plan(
             fact_id = str(p.get("fact_id") or "").strip()
             if not media_id:
                 continue
-            plan.media_pins.append(
-                ModulePin(media_id=media_id, fact_id=fact_id, slot=slot)
-            )
+            plan.media_pins.append(ModulePin(media_id=media_id, fact_id=fact_id, slot=slot))
 
     return plan
 

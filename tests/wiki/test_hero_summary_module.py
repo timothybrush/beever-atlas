@@ -147,9 +147,7 @@ def test_build_hero_summary_data_decision_and_question_counts_from_signals() -> 
 
 
 def test_build_hero_summary_data_zero_counts_when_signals_empty() -> None:
-    out = build_hero_summary_data(
-        tldr="x", overview="y", signals={}, facts=[]
-    )
+    out = build_hero_summary_data(tldr="x", overview="y", signals={}, facts=[])
     h = out["highlights"]
     assert h["critical_count"] == 0
     assert h["decision_count"] == 0

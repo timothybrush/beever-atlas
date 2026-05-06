@@ -60,7 +60,12 @@ def test_decision_log_renders_table_with_status_badges() -> None:
     data = {
         "decisions": [
             {"decision": "Adopt JWT", "status": "active", "made_by": "Jacky", "date": "2026-04-15"},
-            {"decision": "Use Mattermost", "status": "superseded", "made_by": "Thomas", "date": "2026-04-10"},
+            {
+                "decision": "Use Mattermost",
+                "status": "superseded",
+                "made_by": "Thomas",
+                "date": "2026-04-10",
+            },
         ]
     }
     out = decision_log.render(data)
@@ -189,8 +194,17 @@ def test_pros_cons_both_empty_returns_empty() -> None:
 def test_quote_highlights_renders_blockquotes() -> None:
     data = {
         "quotes": [
-            {"text": "We must ship by Friday", "author": "Thomas", "date": "2026-04-15", "citations": "[1]"},
-            {"text": "I disagree, the test plan isn't ready", "author": "Jacky", "date": "2026-04-15"},
+            {
+                "text": "We must ship by Friday",
+                "author": "Thomas",
+                "date": "2026-04-15",
+                "citations": "[1]",
+            },
+            {
+                "text": "I disagree, the test plan isn't ready",
+                "author": "Jacky",
+                "date": "2026-04-15",
+            },
         ]
     }
     out = quote_highlights.render(data)
@@ -326,9 +340,7 @@ def test_open_questions_empty_returns_empty() -> None:
 
 
 def test_subpage_cards_delegates_to_children_toc() -> None:
-    out = subpage_cards.render(
-        {"children": [{"title": "Auth", "slug": "topic-auth"}]}
-    )
+    out = subpage_cards.render({"children": [{"title": "Auth", "slug": "topic-auth"}]})
     assert "[Auth](/wiki/topic-auth)" in out
 
 
@@ -344,8 +356,7 @@ def test_subpage_cards_empty_returns_empty() -> None:
 def test_related_threads_caps_at_five() -> None:
     data = {
         "related": [
-            {"title": f"Topic {i}", "slug": f"t{i}", "reason": f"shares X{i}"}
-            for i in range(20)
+            {"title": f"Topic {i}", "slug": f"t{i}", "reason": f"shares X{i}"} for i in range(20)
         ]
     }
     out = related_threads.render(data)

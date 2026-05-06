@@ -189,34 +189,19 @@ def detect_tensions(facts: list[dict] | None) -> dict[str, Any]:
             primary_text = text_a if len(text_a) >= len(text_b) else text_b
             title = _first_sentence_capped(primary_text)
 
-            ts_a = str(
-                fa.get("message_ts")
-                or fa.get("timestamp")
-                or fa.get("date")
-                or ""
-            )
-            ts_b = str(
-                fb.get("message_ts")
-                or fb.get("timestamp")
-                or fb.get("date")
-                or ""
-            )
+            ts_a = str(fa.get("message_ts") or fa.get("timestamp") or fa.get("date") or "")
+            ts_b = str(fb.get("message_ts") or fb.get("timestamp") or fb.get("date") or "")
             since = _earlier_iso_date(ts_a, ts_b)
 
             def _stance(fact: dict[str, Any]) -> str:
                 """Best-effort stance summary — first sentence of the
                 fact text, capped, safety-stripped."""
-                return _first_sentence_capped(
-                    str(fact.get("memory_text") or "")
-                )
+                return _first_sentence_capped(str(fact.get("memory_text") or ""))
 
             def _author(fact: dict[str, Any]) -> str:
                 return _strip_safety_markers(
                     str(
-                        fact.get("author_name")
-                        or fact.get("user_name")
-                        or fact.get("author")
-                        or ""
+                        fact.get("author_name") or fact.get("user_name") or fact.get("author") or ""
                     )
                 )
 

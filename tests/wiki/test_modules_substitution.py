@@ -38,9 +38,7 @@ def test_module_marker_regex_matches_marker_with_ref() -> None:
 def test_module_marker_regex_ignores_non_module_double_angle() -> None:
     """Don't match ordinary << or other token patterns the wiki uses
     (e.g., the existing ``<<CHILDREN_TOC>>`` marker)."""
-    matches = list(
-        MODULE_MARKER_RE.finditer("<<CHILDREN_TOC>> and <<KEY_FACTS_TABLE>>")
-    )
+    matches = list(MODULE_MARKER_RE.finditer("<<CHILDREN_TOC>> and <<KEY_FACTS_TABLE>>"))
     assert matches == []
 
 
@@ -98,10 +96,7 @@ def test_substitute_raises_on_unknown_module_id() -> None:
 
 
 def test_substitute_handles_multiple_markers_in_order() -> None:
-    body = (
-        "Intro.\n\n<<MODULE:key_facts>>\n\nMiddle prose.\n\n"
-        "<<MODULE:decision_log>>\n\nOutro."
-    )
+    body = "Intro.\n\n<<MODULE:key_facts>>\n\nMiddle prose.\n\n<<MODULE:decision_log>>\n\nOutro."
     rendered = {
         "key_facts": "FACTS_TABLE",
         "decision_log": "DECISIONS_TABLE",

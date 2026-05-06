@@ -138,23 +138,17 @@ class HeuristicCandidates:
                 # Signal 1: multi-word common prefix.
                 prefix = _common_word_prefix(a.get("title", ""), b.get("title", ""))
                 if _word_count(prefix) >= PREFIX_MIN_WORDS:
-                    signals.setdefault("prefix", []).append(
-                        f"shared prefix '{prefix}'"
-                    )
+                    signals.setdefault("prefix", []).append(f"shared prefix '{prefix}'")
 
                 # Signal 2: entity Jaccard.
                 jacc = _entity_jaccard(a.get("key_entities"), b.get("key_entities"))
                 if jacc >= ENTITY_JACCARD_THRESHOLD:
-                    signals.setdefault("entity", []).append(
-                        f"entity overlap {jacc:.2f}"
-                    )
+                    signals.setdefault("entity", []).append(f"entity overlap {jacc:.2f}")
 
                 # Signal 3: co-citation density.
                 cocnt = co_count.get(frozenset({a_id, b_id}), 0)
                 if cocnt >= CO_CITATION_THRESHOLD:
-                    signals.setdefault("co_citation", []).append(
-                        f"{cocnt} cross-cited facts"
-                    )
+                    signals.setdefault("co_citation", []).append(f"{cocnt} cross-cited facts")
 
                 if signals:
                     pair_signals[frozenset({a_id, b_id})] = signals

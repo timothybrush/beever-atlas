@@ -119,12 +119,21 @@ def test_compute_tree_depth_flat() -> None:
 
 def test_compute_tree_depth_nested() -> None:
     """Verify depth calculation matches the deepest path."""
-    deep = _make_node("d1", children=[
-        _make_node("d2", children=[
-            _make_node("d3", children=[
-                _make_node("d4"),
-            ]),
-        ]),
-    ])
+    deep = _make_node(
+        "d1",
+        children=[
+            _make_node(
+                "d2",
+                children=[
+                    _make_node(
+                        "d3",
+                        children=[
+                            _make_node("d4"),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
     shallow = _make_node("s")
     assert compute_tree_depth([shallow, deep]) == 4

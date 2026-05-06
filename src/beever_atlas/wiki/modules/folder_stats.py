@@ -32,12 +32,7 @@ def _fact_type(fact: Any) -> str:
 def _author_name(fact: Any) -> str:
     if not isinstance(fact, dict):
         return ""
-    return str(
-        fact.get("author_name")
-        or fact.get("user_name")
-        or fact.get("author")
-        or ""
-    ).strip()
+    return str(fact.get("author_name") or fact.get("user_name") or fact.get("author") or "").strip()
 
 
 def build_folder_stats_data(descendants: list[dict] | None) -> dict[str, Any]:

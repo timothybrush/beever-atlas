@@ -220,16 +220,12 @@ async def test_invalid_kind_schema_retries_once_then_succeeds(
     _stub_facts(maintainer, ["f1"])
 
     bad = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "first body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "first body"}],
         # Missing required `summary` for topic kind → triggers retry.
         "kind_schema": {"key_decisions": ["foo"]},
     }
     good = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "second body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "second body"}],
         "kind_schema": {
             "summary": "fixed",
             "key_decisions": [],
@@ -317,10 +313,7 @@ async def test_two_invalid_responses_save_markdown_only_and_warn(
     overview = next(s for s in saved.sections if s.id == "overview")
     assert overview.content_md == "best-effort body"
     # Warning carries the structured event name.
-    assert any(
-        "wiki_kind_schema_validation_failed" in rec.getMessage()
-        for rec in captured
-    )
+    assert any("wiki_kind_schema_validation_failed" in rec.getMessage() for rec in captured)
 
 
 # ---------------------------------------------------------------------------
@@ -341,9 +334,7 @@ async def test_flag_off_uses_legacy_prompt_and_does_not_set_kind_schema(
 
     captured_prompts: list[str] = []
     legacy_response = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "legacy body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "legacy body"}],
         # If the redesign accidentally fired, this would land on the
         # page; the assertion below proves it does NOT.
         "kind_schema": {"summary": "should be ignored on legacy path"},
@@ -391,9 +382,7 @@ async def test_topic_and_entity_pages_produce_structurally_different_payloads(
     # the same LLM stub picks the kind from prompt content so we exercise
     # both prompts in one test.
     topic_response = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "topic body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "topic body"}],
         "kind_schema": {
             "summary": "Auth uses OAuth2",
             "key_decisions": ["OAuth2"],
@@ -403,9 +392,7 @@ async def test_topic_and_entity_pages_produce_structurally_different_payloads(
         },
     }
     entity_response = {
-        "affected_sections": [
-            {"id": "overview", "title": "Overview", "content_md": "entity body"}
-        ],
+        "affected_sections": [{"id": "overview", "title": "Overview", "content_md": "entity body"}],
         "kind_schema": {
             "name": "Alice",
             "role": "engineer",

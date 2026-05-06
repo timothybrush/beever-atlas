@@ -334,7 +334,8 @@ def substitute_module_markers(
             # input keys).
             _sub_logger.info(
                 "module_substitution_empty module=%s ref=%s — marker stripped",
-                module_id, ref or "",
+                module_id,
+                ref or "",
             )
         return rendered
 

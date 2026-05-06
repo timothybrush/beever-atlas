@@ -77,12 +77,7 @@ def count_glossary_terms_used(
     for f in facts:
         if not isinstance(f, dict):
             continue
-        body = _strip_safety_markers(
-            f.get("memory_text")
-            or f.get("fact")
-            or f.get("text")
-            or ""
-        )
+        body = _strip_safety_markers(f.get("memory_text") or f.get("fact") or f.get("text") or "")
         if body:
             bodies.append(body)
     if not bodies:
@@ -163,9 +158,7 @@ def build_acronym_legend_data(
     from beever_atlas.wiki.modules._text_utils import _strip_safety_markers
 
     # ---- Phase 3 structured-first path -----------------------------
-    structured_terms = _collect_structured_terms(
-        [f for f in facts if isinstance(f, dict)]
-    )
+    structured_terms = _collect_structured_terms([f for f in facts if isinstance(f, dict)])
 
     items: list[dict[str, Any]] = []
     seen_terms: set[str] = set()
@@ -182,9 +175,7 @@ def build_acronym_legend_data(
                 term = _normalize_term(entry.get("term"))
                 definition = str(entry.get("definition") or "").strip()
                 first_mentioned = str(
-                    entry.get("first_mentioned_by")
-                    or entry.get("author")
-                    or ""
+                    entry.get("first_mentioned_by") or entry.get("author") or ""
                 ).strip()
             elif isinstance(entry, str):
                 term = _normalize_term(entry)
@@ -195,11 +186,7 @@ def build_acronym_legend_data(
             if not term or term.lower() in seen_terms:
                 continue
             is_acronym = term.isupper() and term.replace(" ", "").isalnum() and len(term) >= 2
-            matched = (
-                term in structured_acronyms
-                if is_acronym
-                else term.lower() in structured_lc
-            )
+            matched = term in structured_acronyms if is_acronym else term.lower() in structured_lc
             if not matched:
                 continue
             seen_terms.add(term.lower())
@@ -223,12 +210,7 @@ def build_acronym_legend_data(
     for f in facts:
         if not isinstance(f, dict):
             continue
-        body = _strip_safety_markers(
-            f.get("memory_text")
-            or f.get("fact")
-            or f.get("text")
-            or ""
-        )
+        body = _strip_safety_markers(f.get("memory_text") or f.get("fact") or f.get("text") or "")
         if body:
             bodies.append(body)
 
@@ -237,9 +219,7 @@ def build_acronym_legend_data(
             term = _normalize_term(entry.get("term"))
             definition = str(entry.get("definition") or "").strip()
             first_mentioned = str(
-                entry.get("first_mentioned_by")
-                or entry.get("author")
-                or ""
+                entry.get("first_mentioned_by") or entry.get("author") or ""
             ).strip()
         elif isinstance(entry, str):
             term = _normalize_term(entry)

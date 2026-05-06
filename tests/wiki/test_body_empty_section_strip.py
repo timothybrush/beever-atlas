@@ -48,13 +48,7 @@ def orch_logs():
 
 
 def test_empty_terms_used_header_is_stripped(orch_logs):
-    body = (
-        "## Page\n\n"
-        "Body content.\n\n"
-        "### Terms Used\n\n\n"
-        "### Sources\n\n"
-        "- Some source\n"
-    )
+    body = "## Page\n\nBody content.\n\n### Terms Used\n\n\n### Sources\n\n- Some source\n"
     out = _strip_empty_frontend_section_headers(body, page_id="test-page")
 
     assert "### Terms Used" not in out
@@ -63,9 +57,7 @@ def test_empty_terms_used_header_is_stripped(orch_logs):
     assert "- Some source" in out
     # Structured telemetry emitted.
     assert any(
-        "body_empty_section_stripped" in m
-        and "Terms Used" in m
-        and "test-page" in m
+        "body_empty_section_stripped" in m and "Terms Used" in m and "test-page" in m
         for m in orch_logs
     ), f"no matching log among {orch_logs}"
 
@@ -87,11 +79,7 @@ def test_section_with_actual_content_is_kept():
 
 
 def test_non_frontend_section_followed_by_content_is_kept():
-    body = (
-        "## Page\n\n"
-        "### Random User Header\n\n"
-        "Whatever.\n"
-    )
+    body = "## Page\n\n### Random User Header\n\nWhatever.\n"
     out = _strip_empty_frontend_section_headers(body, page_id="t")
     assert "### Random User Header" in out
     assert "Whatever." in out
@@ -100,32 +88,20 @@ def test_non_frontend_section_followed_by_content_is_kept():
 def test_non_frontend_empty_section_is_kept():
     """A header NOT in the frontend-only allowlist must NOT be touched
     even when its body is empty — we don't know what the LLM intended."""
-    body = (
-        "## Page\n\n"
-        "### Random User Header\n\n\n"
-        "### Next\n\n"
-        "Content.\n"
-    )
+    body = "## Page\n\n### Random User Header\n\n\n### Next\n\nContent.\n"
     out = _strip_empty_frontend_section_headers(body, page_id="t")
     assert "### Random User Header" in out
 
 
 def test_empty_source_messages_header_stripped(orch_logs):
-    body = (
-        "## Page\n\n"
-        "Body.\n\n"
-        "### Source Messages\n\n\n\n"
-        "### Other\n\n"
-        "Other content.\n"
-    )
+    body = "## Page\n\nBody.\n\n### Source Messages\n\n\n\n### Other\n\nOther content.\n"
     out = _strip_empty_frontend_section_headers(body, page_id="src-test")
     assert "### Source Messages" not in out
     assert "### Other" in out
     assert "Other content." in out
-    assert any(
-        "body_empty_section_stripped" in m and "Source Messages" in m
-        for m in orch_logs
-    ), f"no matching log among {orch_logs}"
+    assert any("body_empty_section_stripped" in m and "Source Messages" in m for m in orch_logs), (
+        f"no matching log among {orch_logs}"
+    )
 
 
 def test_empty_section_at_end_of_content_stripped():

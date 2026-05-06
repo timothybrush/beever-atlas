@@ -5,6 +5,7 @@ visible than false negatives (a stray callout looks like a bug; a
 missed tension is unnoticed). These tests pin the conservatism so
 future tuning is intentional, not accidental.
 """
+
 from __future__ import annotations
 
 from beever_atlas.wiki.modules.tension_detector import detect_tensions

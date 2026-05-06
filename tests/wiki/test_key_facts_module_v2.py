@@ -131,9 +131,7 @@ def test_build_key_facts_data_truncates_long_titles_at_word_boundary() -> None:
         "very very very very very very very very long length to exercise "
         "the truncation behavior of the title builder beyond limits"
     )
-    item = key_facts.build_key_facts_data([_make_fact(memory_text=long_text)])[
-        "items"
-    ][0]
+    item = key_facts.build_key_facts_data([_make_fact(memory_text=long_text)])["items"][0]
     # Title is bounded; either ends at a word boundary with "…" or at
     # the cap with "…".
     assert len(item["title"]) <= 141  # 140 + ellipsis
@@ -291,8 +289,6 @@ def test_legacy_render_emits_markdown_table_for_fallback_path() -> None:
     """``render()`` is preserved as a fallback for the orchestrator's
     catastrophic path. Returns the same GFM table the v1 module did
     so existing fallback behavior stays intact."""
-    out = key_facts.render(
-        {"facts": [_make_fact(memory_text="X happened", importance=8)]}
-    )
+    out = key_facts.render({"facts": [_make_fact(memory_text="X happened", importance=8)]})
     assert "| Fact" in out
     assert "X happened" in out

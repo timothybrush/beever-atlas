@@ -483,7 +483,7 @@ function groupByPrefix(nodes: WikiPageNode[]): SidebarRow[] {
     let runEnd = i;
     let prefix = "";
     if (i + 1 < nodes.length) {
-      let candidatePrefix = commonWordPrefix(nodes[i].title, nodes[i + 1].title);
+      const candidatePrefix = commonWordPrefix(nodes[i].title, nodes[i + 1].title);
       if (candidatePrefix.split(/\s+/).filter(Boolean).length >= 2) {
         runEnd = i + 1;
         prefix = candidatePrefix;

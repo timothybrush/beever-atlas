@@ -25,9 +25,7 @@ def test_valid_flat_structure() -> None:
 def test_valid_two_level_tree() -> None:
     """One folder with 2 children + 1 leaf → passes."""
     plan = _plan(
-        folders=[
-            PlannedFolder(slug="security", title="Security", child_slugs=["a", "b"])
-        ],
+        folders=[PlannedFolder(slug="security", title="Security", child_slugs=["a", "b"])],
         leaves=["c"],
     )
     validate_plan(plan, expected_cluster_slugs={"a", "b", "c"})
@@ -93,9 +91,7 @@ def test_duplicate_folder_slugs_fails() -> None:
 
 def test_missing_folder_slug_fails() -> None:
     """A folder with no slug → folder_slug_missing."""
-    plan = _plan(
-        folders=[PlannedFolder(slug="", title="X", child_slugs=["a"])]
-    )
+    plan = _plan(folders=[PlannedFolder(slug="", title="X", child_slugs=["a"])])
     with pytest.raises(PlanValidationError) as exc:
         validate_plan(plan, expected_cluster_slugs={"a"})
     assert exc.value.reason == "folder_slug_missing"

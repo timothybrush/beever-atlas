@@ -185,6 +185,7 @@ def test_anchor_with_html_chars_sanitised() -> None:
     assert anchor == anchor.lower()
     # Either a derived slug or the section-N fallback.
     import re as _re
+
     assert _re.match(r"^[a-z0-9][a-z0-9-]{0,23}$", anchor) is not None
 
 
@@ -397,9 +398,7 @@ def test_forbidden_phrase_drops_paragraph() -> None:
             ),
         ]
         cleaned, telem = validate_narrative_sections(sections)
-        assert telem["paragraphs_dropped"] >= 1, (
-            f"forbidden phrase not detected: {phrase!r}"
-        )
+        assert telem["paragraphs_dropped"] >= 1, f"forbidden phrase not detected: {phrase!r}"
 
 
 def test_forbidden_phrase_case_insensitive() -> None:
@@ -477,8 +476,7 @@ def test_full_coverage_passes_gate() -> None:
     sections = [
         _make_section(
             paragraphs=[
-                _make_paragraph(text=f"Paragraph {i}.", citations=[f"f_{i}"])
-                for i in range(4)
+                _make_paragraph(text=f"Paragraph {i}.", citations=[f"f_{i}"]) for i in range(4)
             ]
         ),
     ]
@@ -507,9 +505,7 @@ def test_section_truncated_to_soft_cap() -> None:
     ]
     cleaned, telem = validate_narrative_sections(sections)
     if cleaned:
-        section_words = sum(
-            len(p["text"].split()) for p in cleaned[0]["paragraphs"]
-        )
+        section_words = sum(len(p["text"].split()) for p in cleaned[0]["paragraphs"])
         # Allow some slack — sentence-boundary truncation may overshoot
         # the cap by one sentence at most.
         assert section_words <= 420

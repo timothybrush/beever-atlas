@@ -60,6 +60,7 @@ def effective_allowed_hosts() -> frozenset[str]:
     end-to-end."""
     return frozenset(ALLOWED_HOSTS) | _RUNTIME_HOSTS
 
+
 # httpx client lifetime: one per process. Connection pooling + HTTP/2.
 _client: httpx.AsyncClient | None = None
 

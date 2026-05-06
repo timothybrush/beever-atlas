@@ -140,16 +140,12 @@ def test_eligible_predicates_satisfied_when_signals_present() -> None:
 
     timeline = get_module("timeline")
     assert timeline is not None
-    assert (
-        timeline.eligible({"event_count": 5, "event_span_days": 30}) is True
-    )
+    assert timeline.eligible({"event_count": 5, "event_span_days": 30}) is True
     assert timeline.eligible({"event_count": 3, "event_span_days": 30}) is False  # too few events
     assert timeline.eligible({"event_count": 5, "event_span_days": 7}) is False  # too short span
 
     related = get_module("related_threads")
     assert related is not None
-    assert (
-        related.eligible({"related_topics": [{"score": 0.5}, {"score": 0.2}]}) is True
-    )
+    assert related.eligible({"related_topics": [{"score": 0.5}, {"score": 0.2}]}) is True
     assert related.eligible({"related_topics": [{"score": 0.2}]}) is False
     assert related.eligible({"related_topics": []}) is False

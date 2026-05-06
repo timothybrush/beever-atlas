@@ -259,9 +259,7 @@ async def test_endpoint_returns_empty_when_no_pages_and_no_neo4j_parity() -> Non
         pass
 
     principal = type("P", (), {"id": "u-1"})()
-    deps_patch, auth_patch = _patch_endpoint_deps(
-        pages=[], graph_backend=_BareGraph()
-    )
+    deps_patch, auth_patch = _patch_endpoint_deps(pages=[], graph_backend=_BareGraph())
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
     assert result == {"channel_id": "C1", "nodes": [], "edges": []}
@@ -285,9 +283,7 @@ async def test_endpoint_swallows_neo4j_errors_keeping_wiki_pages() -> None:
         ),
     ]
     principal = type("P", (), {"id": "u-1"})()
-    deps_patch, auth_patch = _patch_endpoint_deps(
-        pages=pages, graph_backend=_BoomGraph()
-    )
+    deps_patch, auth_patch = _patch_endpoint_deps(pages=pages, graph_backend=_BoomGraph())
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
     # Both wiki pages survived the Neo4j failure (the channel hub is
@@ -329,9 +325,7 @@ async def test_endpoint_builds_wiki_nodes_and_edges_from_mongo() -> None:
         ),
     ]
     principal = type("P", (), {"id": "u-1"})()
-    deps_patch, auth_patch = _patch_endpoint_deps(
-        pages=pages, graph_backend=_BareGraph()
-    )
+    deps_patch, auth_patch = _patch_endpoint_deps(pages=pages, graph_backend=_BareGraph())
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
 
@@ -365,9 +359,7 @@ async def test_endpoint_drops_dangling_cross_link_edges() -> None:
         ),
     ]
     principal = type("P", (), {"id": "u-1"})()
-    deps_patch, auth_patch = _patch_endpoint_deps(
-        pages=pages, graph_backend=_BareGraph()
-    )
+    deps_patch, auth_patch = _patch_endpoint_deps(pages=pages, graph_backend=_BareGraph())
     with deps_patch, auth_patch:
         result = await get_wiki_graph("C1", target_lang="en", principal=principal)
     wiki_nodes = [n for n in result["nodes"] if n["data"]["kind"] == "wiki"]
@@ -423,9 +415,7 @@ async def test_endpoint_enriches_with_entity_edges_from_neo4j() -> None:
     visible_ids = {n["data"]["id"] for n in result["nodes"]}
     assert "topic-auth" in visible_ids
     assert "entity:Bob" in visible_ids
-    entity_edges = [
-        e for e in result["edges"] if e["data"]["kind"] == "references_entity"
-    ]
+    entity_edges = [e for e in result["edges"] if e["data"]["kind"] == "references_entity"]
     assert len(entity_edges) == 1
     assert entity_edges[0]["data"]["source"] == "topic-auth"
     assert entity_edges[0]["data"]["target"] == "entity:Bob"

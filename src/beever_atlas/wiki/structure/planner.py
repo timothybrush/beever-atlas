@@ -81,9 +81,7 @@ class PlannedStructure:
     builder) for telemetry without parsing log lines."""
 
     @classmethod
-    def flat(
-        cls, cluster_slugs: list[str], *, reason: str | None = None
-    ) -> PlannedStructure:
+    def flat(cls, cluster_slugs: list[str], *, reason: str | None = None) -> PlannedStructure:
         """Build the degenerate "no folders" structure.
 
         This is what the planner returns when the LLM fails, when the
@@ -178,9 +176,7 @@ class WikiStructurePlanner:
 
         if len(cluster_slug_set) < self._min_topics:
             # Sparse channel — flat layout is fine and cheaper.
-            return PlannedStructure.flat(
-                sorted(cluster_slug_set), reason="below_min_topics"
-            )
+            return PlannedStructure.flat(sorted(cluster_slug_set), reason="below_min_topics")
 
         # Stage 1: heuristic candidates
         candidates = HeuristicCandidates.compute(clusters, fact_graph)
@@ -192,9 +188,7 @@ class WikiStructurePlanner:
                 len(cluster_slug_set),
                 len(candidates.groups),
             )
-            return PlannedStructure.flat(
-                sorted(cluster_slug_set), reason="no_llm_configured"
-            )
+            return PlannedStructure.flat(sorted(cluster_slug_set), reason="no_llm_configured")
 
         try:
             raw = await self._invoke_llm(
@@ -204,27 +198,21 @@ class WikiStructurePlanner:
             )
         except Exception as exc:  # noqa: BLE001 — LLM exceptions are best-effort
             logger.warning(
-                "wiki_structure_planner_fallback reason=llm_exception "
-                "exc=%s clusters=%d",
+                "wiki_structure_planner_fallback reason=llm_exception exc=%s clusters=%d",
                 type(exc).__name__,
                 len(cluster_slug_set),
             )
-            return PlannedStructure.flat(
-                sorted(cluster_slug_set), reason="llm_exception"
-            )
+            return PlannedStructure.flat(sorted(cluster_slug_set), reason="llm_exception")
 
         # Parse the LLM JSON. Best-effort: strip code fences if present.
         try:
             parsed = _parse_llm_json(raw)
         except (json.JSONDecodeError, ValueError) as exc:
             logger.warning(
-                "wiki_structure_planner_fallback reason=json_parse "
-                "exc=%s",
+                "wiki_structure_planner_fallback reason=json_parse exc=%s",
                 type(exc).__name__,
             )
-            return PlannedStructure.flat(
-                sorted(cluster_slug_set), reason="json_parse"
-            )
+            return PlannedStructure.flat(sorted(cluster_slug_set), reason="json_parse")
 
         plan = _structure_from_dict(parsed)
 
@@ -237,9 +225,7 @@ class WikiStructurePlanner:
                 exc.reason,
                 exc.detail,
             )
-            return PlannedStructure.flat(
-                sorted(cluster_slug_set), reason=exc.reason
-            )
+            return PlannedStructure.flat(sorted(cluster_slug_set), reason=exc.reason)
 
         return plan
 

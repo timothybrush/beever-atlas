@@ -40,11 +40,7 @@ def test_strips_lone_close_tag() -> None:
 
 def test_strips_multiple_wrappers_full() -> None:
     """All known tags get stripped regardless of nesting / ordering."""
-    src = (
-        "<untrusted>part1</untrusted> "
-        "<sanitized>part2</sanitized> "
-        "<external>part3</external>"
-    )
+    src = "<untrusted>part1</untrusted> <sanitized>part2</sanitized> <external>part3</external>"
     out = _strip_safety_markers(src)
     assert "<untrusted>" not in out
     assert "</untrusted>" not in out

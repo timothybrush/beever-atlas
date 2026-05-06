@@ -63,6 +63,7 @@ def _build_download_headers(filename: str, fallback: str) -> dict[str, str]:
         "X-Content-Type-Options": "nosniff",
     }
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/channels/{channel_id}/wiki", tags=["wiki"])
@@ -250,9 +251,7 @@ async def download_wiki_markdown(
         # then Reference & Evidence appendix). Pages without a narrative
         # payload skip this branch and the export carries only the legacy
         # content as before (backward compat).
-        narrative_md = narrative_sections_to_markdown(
-            page.get("narrative_sections") or []
-        )
+        narrative_md = narrative_sections_to_markdown(page.get("narrative_sections") or [])
         if narrative_md:
             parts.append(narrative_md)
             # Separator between the narrative article and the Reference
@@ -311,9 +310,7 @@ async def download_wiki_page_markdown(
 
     parts: list[str] = [f"# {prefix}{title}\n"]
 
-    narrative_md = narrative_sections_to_markdown(
-        page.get("narrative_sections") or []
-    )
+    narrative_md = narrative_sections_to_markdown(page.get("narrative_sections") or [])
     if narrative_md:
         parts.append(narrative_md)
         parts.append("\n---\n")
@@ -939,9 +936,7 @@ async def get_wiki_graph(
     await assert_channel_access(principal, channel_id)
     lang = await _resolve_target_lang(channel_id, target_lang)
     store = await _load_page_store()
-    pages = await store.list_pages_by_kind(
-        channel_id, target_lang=lang, scope="human"
-    )
+    pages = await store.list_pages_by_kind(channel_id, target_lang=lang, scope="human")
 
     nodes: list[dict[str, object]] = []
     edges: list[dict[str, object]] = []
@@ -981,9 +976,7 @@ async def get_wiki_graph(
                     "kind": "wiki",
                     "page_kind": page.kind or "topic",
                     "version": page.version,
-                    "last_updated": page.updated_at.isoformat()
-                    if page.updated_at
-                    else "",
+                    "last_updated": page.updated_at.isoformat() if page.updated_at else "",
                 }
             }
         )
@@ -1070,16 +1063,12 @@ async def get_wiki_graph(
                 exc,
             )
             legacy_doc = None
-        legacy_pages = (
-            (legacy_doc or {}).get("pages") if isinstance(legacy_doc, dict) else None
-        )
+        legacy_pages = (legacy_doc or {}).get("pages") if isinstance(legacy_doc, dict) else None
         if isinstance(legacy_doc, dict):
             structure = legacy_doc.get("structure") or {}
             if isinstance(structure, dict):
                 channel_label = (
-                    structure.get("channel_name")
-                    or legacy_doc.get("channel_name")
-                    or ""
+                    structure.get("channel_name") or legacy_doc.get("channel_name") or ""
                 )
         if isinstance(legacy_pages, dict):
             for page_id, page in legacy_pages.items():
@@ -1096,11 +1085,7 @@ async def get_wiki_graph(
                 # Short summary: the first 240 chars of content_md /
                 # content / summary so the side panel can show
                 # something useful without a second round-trip.
-                raw = (
-                    page.get("summary")
-                    or page.get("content")
-                    or ""
-                )
+                raw = page.get("summary") or page.get("content") or ""
                 if isinstance(raw, str):
                     excerpt = raw.strip()[:240].rstrip()
                     if len(raw) > 240:

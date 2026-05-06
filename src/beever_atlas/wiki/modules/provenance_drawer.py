@@ -101,11 +101,7 @@ def build_provenance_drawer_data(facts: list[Any] | None) -> dict[str, Any]:
         if not isinstance(f, dict):
             continue
         platform = str(f.get("platform") or "")
-        source_msg_id = str(
-            f.get("source_message_id")
-            or f.get("message_id")
-            or ""
-        )
+        source_msg_id = str(f.get("source_message_id") or f.get("message_id") or "")
         # Per-fact id used for the contributed_to_facts list and as
         # the unique key when source_message_id is unknown.
         fact_id = str(f.get("fact_id") or f.get("id") or "")
@@ -116,29 +112,10 @@ def build_provenance_drawer_data(facts: list[Any] | None) -> dict[str, Any]:
             continue
         key = (platform, key_id)
 
-        ts = str(
-            f.get("message_ts")
-            or f.get("timestamp")
-            or f.get("date")
-            or ""
-        )
-        author = str(
-            f.get("author_name")
-            or f.get("user_name")
-            or f.get("author")
-            or ""
-        )
-        url = str(
-            f.get("permalink")
-            or f.get("source_url")
-            or f.get("message_url")
-            or ""
-        )
-        channel = str(
-            f.get("channel_name")
-            or f.get("channel")
-            or ""
-        )
+        ts = str(f.get("message_ts") or f.get("timestamp") or f.get("date") or "")
+        author = str(f.get("author_name") or f.get("user_name") or f.get("author") or "")
+        url = str(f.get("permalink") or f.get("source_url") or f.get("message_url") or "")
+        channel = str(f.get("channel_name") or f.get("channel") or "")
         # Snippet — prefer the original message body when plumbed
         # through; fall back to the synthesised fact text. Either way
         # the reader gets something readable. Strip any safety

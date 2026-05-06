@@ -36,18 +36,10 @@ def test_cross_cutting_decisions_in_catalog() -> None:
 
 def test_cross_cutting_predicate_requires_folder_and_min_2_decisions() -> None:
     spec = MODULE_CATALOG["cross_cutting_decisions"]
-    assert spec.eligible(
-        {"archetype": "folder", "descendant_decision_count": 2}
-    ) is True
-    assert spec.eligible(
-        {"archetype": "folder", "descendant_decision_count": 5}
-    ) is True
-    assert spec.eligible(
-        {"archetype": "folder", "descendant_decision_count": 1}
-    ) is False
-    assert spec.eligible(
-        {"archetype": "topic", "descendant_decision_count": 5}
-    ) is False
+    assert spec.eligible({"archetype": "folder", "descendant_decision_count": 2}) is True
+    assert spec.eligible({"archetype": "folder", "descendant_decision_count": 5}) is True
+    assert spec.eligible({"archetype": "folder", "descendant_decision_count": 1}) is False
+    assert spec.eligible({"archetype": "topic", "descendant_decision_count": 5}) is False
     assert spec.eligible({}) is False
 
 

@@ -126,8 +126,7 @@ def test_entity_diagram_dropped_when_only_one_distinct_verb_overall(
     out = _suppress_thin_modules(plan, signals, {}, page_id="topic-7")
     assert out.modules == []
     assert any(
-        "reason=entity_diagram_low_verb_diversity" in m
-        for m in _suppressed_messages(captured_logs)
+        "reason=entity_diagram_low_verb_diversity" in m for m in _suppressed_messages(captured_logs)
     )
 
 
@@ -159,8 +158,7 @@ def test_flow_chart_dropped_when_no_directed_edges(captured_logs) -> None:
     out = _suppress_thin_modules(plan, signals, {}, page_id="topic-9")
     assert out.modules == []
     assert any(
-        "reason=flow_chart_no_directed_edges" in m
-        for m in _suppressed_messages(captured_logs)
+        "reason=flow_chart_no_directed_edges" in m for m in _suppressed_messages(captured_logs)
     )
 
 
@@ -191,10 +189,7 @@ def test_subpage_cards_dropped_when_single_child(captured_logs) -> None:
     }
     out = _suppress_thin_modules(plan, signals, {}, page_id="parent-1")
     assert out.modules == []
-    assert any(
-        "reason=subpage_cards_singleton" in m
-        for m in _suppressed_messages(captured_logs)
-    )
+    assert any("reason=subpage_cards_singleton" in m for m in _suppressed_messages(captured_logs))
 
 
 def test_subpage_cards_kept_when_two_or_more_children() -> None:
@@ -217,14 +212,7 @@ def test_subpage_cards_kept_when_two_or_more_children() -> None:
 def test_mermaid_block_post_render_dropped_when_zero_edges(captured_logs) -> None:
     plan = ModulePlan(modules=[{"id": "entity_diagram", "anchor": "ed"}])
     rendered = {
-        "entity_diagram": (
-            "```mermaid\n"
-            "graph TD\n"
-            "    A[Foo]\n"
-            "    B[Bar]\n"
-            "    C[Baz]\n"
-            "```"
-        ),
+        "entity_diagram": ("```mermaid\ngraph TD\n    A[Foo]\n    B[Bar]\n    C[Baz]\n```"),
     }
     out_plan, out_rendered = _suppress_empty_mermaid_modules(
         plan, rendered, page_id="topic-mermaid"
@@ -243,14 +231,7 @@ def test_mermaid_block_post_render_dropped_when_zero_edges(captured_logs) -> Non
 def test_mermaid_block_post_render_kept_when_edges_present() -> None:
     plan = ModulePlan(modules=[{"id": "entity_diagram", "anchor": "ed"}])
     rendered = {
-        "entity_diagram": (
-            "```mermaid\n"
-            "graph TD\n"
-            "    A[Foo]\n"
-            "    B[Bar]\n"
-            "    A --> B\n"
-            "```"
-        ),
+        "entity_diagram": ("```mermaid\ngraph TD\n    A[Foo]\n    B[Bar]\n    A --> B\n```"),
     }
     out_plan, out_rendered = _suppress_empty_mermaid_modules(plan, rendered)
     assert [m["id"] for m in out_plan.modules] == ["entity_diagram"]
@@ -263,12 +244,7 @@ def test_mermaid_block_post_render_keeps_labelled_arrows() -> None:
     plan = ModulePlan(modules=[{"id": "entity_diagram", "anchor": "ed"}])
     rendered = {
         "entity_diagram": (
-            "```mermaid\n"
-            "graph TD\n"
-            "    A[Foo]\n"
-            "    B[Bar]\n"
-            "    A -->|relates_to| B\n"
-            "```"
+            "```mermaid\ngraph TD\n    A[Foo]\n    B[Bar]\n    A -->|relates_to| B\n```"
         ),
     }
     out_plan, _ = _suppress_empty_mermaid_modules(plan, rendered)

@@ -33,20 +33,12 @@ def test_top_contributors_in_catalog() -> None:
 
 def test_top_contributors_predicate_requires_folder_and_min_2_contributors() -> None:
     spec = MODULE_CATALOG["top_contributors"]
-    assert spec.eligible(
-        {"archetype": "folder", "distinct_contributor_count": 2}
-    ) is True
-    assert spec.eligible(
-        {"archetype": "folder", "distinct_contributor_count": 5}
-    ) is True
+    assert spec.eligible({"archetype": "folder", "distinct_contributor_count": 2}) is True
+    assert spec.eligible({"archetype": "folder", "distinct_contributor_count": 5}) is True
     # 1 contributor → not enough for a "top" strip
-    assert spec.eligible(
-        {"archetype": "folder", "distinct_contributor_count": 1}
-    ) is False
+    assert spec.eligible({"archetype": "folder", "distinct_contributor_count": 1}) is False
     # Non-folder archetype → not eligible
-    assert spec.eligible(
-        {"archetype": "topic", "distinct_contributor_count": 5}
-    ) is False
+    assert spec.eligible({"archetype": "topic", "distinct_contributor_count": 5}) is False
     assert spec.eligible({}) is False
 
 
@@ -95,10 +87,7 @@ def test_build_caps_at_top_n() -> None:
     descendants = [
         {
             "title": "A",
-            "facts": [
-                {"author_name": f"Person{i}", "memory_text": "f"}
-                for i in range(10)
-            ],
+            "facts": [{"author_name": f"Person{i}", "memory_text": "f"} for i in range(10)],
         },
     ]
     data = build_top_contributors_data(descendants, cap=5)

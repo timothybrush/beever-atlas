@@ -153,9 +153,7 @@ async def test_read_wiki_module_returns_data_for_known_anchor(
 ) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     page = _wiki_page(
-        modules=[
-            {"id": "key_facts", "anchor": "key-facts", "data": {"items": [1, 2, 3]}}
-        ]
+        modules=[{"id": "key_facts", "anchor": "key-facts", "data": {"items": [1, 2, 3]}}]
     )
     fake_store = AsyncMock()
     fake_store.get_page_by_slug = AsyncMock(return_value=page)
@@ -185,9 +183,7 @@ async def test_read_wiki_module_returns_module_not_found_for_unknown_anchor(
     registered_tools, monkeypatch
 ) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
-    page = _wiki_page(
-        modules=[{"id": "key_facts", "anchor": "key-facts", "data": {}}]
-    )
+    page = _wiki_page(modules=[{"id": "key_facts", "anchor": "key-facts", "data": {}}])
     fake_store = AsyncMock()
     fake_store.get_page_by_slug = AsyncMock(return_value=page)
     with (
@@ -210,9 +206,7 @@ async def test_read_wiki_module_returns_module_not_found_for_unknown_anchor(
     assert result["error"] == "module_not_found"
 
 
-async def test_read_wiki_module_returns_page_not_found(
-    registered_tools, monkeypatch
-) -> None:
+async def test_read_wiki_module_returns_page_not_found(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     fake_store = AsyncMock()
     fake_store.get_page_by_slug = AsyncMock(return_value=None)
@@ -236,9 +230,7 @@ async def test_read_wiki_module_returns_page_not_found(
     assert result == {"error": "wiki_page_not_found", "slug": "missing"}
 
 
-async def test_read_wiki_module_denies_unauthorized_channel(
-    registered_tools, monkeypatch
-) -> None:
+async def test_read_wiki_module_denies_unauthorized_channel(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     with patch(
         "beever_atlas.infra.channel_access.assert_channel_access",
@@ -331,9 +323,7 @@ async def test_find_decisions_filters_by_since_and_author_and_sorts_desc(
     assert result[0]["rationale"] == "Reduces legal risk."
 
 
-async def test_find_decisions_sorts_by_date_desc_no_filters(
-    registered_tools, monkeypatch
-) -> None:
+async def test_find_decisions_sorts_by_date_desc_no_filters(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     decisions = [
         _atomic_fact(fact_id="f-a", message_ts="2026-01-01T00:00:00Z"),
@@ -363,9 +353,7 @@ async def test_find_decisions_sorts_by_date_desc_no_filters(
             return_value=fake_store,
         ),
     ):
-        result = await registered_tools["find_decisions"](
-            channel_id="C1", ctx=_make_ctx()
-        )
+        result = await registered_tools["find_decisions"](channel_id="C1", ctx=_make_ctx())
     assert [r["fact_id"] for r in result] == ["f-b", "f-c", "f-a"]
 
 
@@ -377,9 +365,7 @@ async def test_find_decisions_returns_empty_when_unauthorized(
         "beever_atlas.infra.channel_access.assert_channel_access",
         new=AsyncMock(side_effect=PermissionError("denied")),
     ):
-        result = await registered_tools["find_decisions"](
-            channel_id="C1", ctx=_make_ctx()
-        )
+        result = await registered_tools["find_decisions"](channel_id="C1", ctx=_make_ctx())
     assert result == []
 
 
@@ -406,15 +392,11 @@ async def test_get_tensions_returns_empty_when_no_tensions_present(
             return_value=fake_store,
         ),
     ):
-        result = await registered_tools["get_tensions"](
-            channel_id="C1", ctx=_make_ctx()
-        )
+        result = await registered_tools["get_tensions"](channel_id="C1", ctx=_make_ctx())
     assert result == []
 
 
-async def test_get_tensions_surfaces_tension_callout_modules(
-    registered_tools, monkeypatch
-) -> None:
+async def test_get_tensions_surfaces_tension_callout_modules(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     page_a = _wiki_page(
         slug="topic-auth",
@@ -462,9 +444,7 @@ async def test_get_tensions_surfaces_tension_callout_modules(
             return_value=fake_store,
         ),
     ):
-        all_tensions = await registered_tools["get_tensions"](
-            channel_id="C1", ctx=_make_ctx()
-        )
+        all_tensions = await registered_tools["get_tensions"](channel_id="C1", ctx=_make_ctx())
         only_open = await registered_tools["get_tensions"](
             channel_id="C1", ctx=_make_ctx(), status="open"
         )
@@ -478,17 +458,13 @@ async def test_get_tensions_surfaces_tension_callout_modules(
     assert [t["tension_id"] for t in only_open] == ["T-1"]
 
 
-async def test_get_tensions_returns_empty_when_unauthorized(
-    registered_tools, monkeypatch
-) -> None:
+async def test_get_tensions_returns_empty_when_unauthorized(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     with patch(
         "beever_atlas.infra.channel_access.assert_channel_access",
         new=AsyncMock(side_effect=PermissionError("denied")),
     ):
-        result = await registered_tools["get_tensions"](
-            channel_id="C1", ctx=_make_ctx()
-        )
+        result = await registered_tools["get_tensions"](channel_id="C1", ctx=_make_ctx())
     assert result == []
 
 
@@ -527,9 +503,7 @@ async def test_find_facts_case_insensitive_substring_with_type_filter(
     from beever_atlas.models.api import PaginatedFacts
 
     fake_weaviate = SimpleNamespace(
-        list_facts=AsyncMock(
-            return_value=PaginatedFacts(memories=facts, total=3, page=1, pages=1)
-        )
+        list_facts=AsyncMock(return_value=PaginatedFacts(memories=facts, total=3, page=1, pages=1))
     )
     fake_store = AsyncMock()
     fake_store.list_pages = AsyncMock(return_value=[])
@@ -573,9 +547,7 @@ async def test_find_facts_clamps_limit_to_max(registered_tools, monkeypatch) -> 
     from beever_atlas.models.api import PaginatedFacts
 
     fake_weaviate = SimpleNamespace(
-        list_facts=AsyncMock(
-            return_value=PaginatedFacts(memories=facts, total=29, page=1, pages=1)
-        )
+        list_facts=AsyncMock(return_value=PaginatedFacts(memories=facts, total=29, page=1, pages=1))
     )
     fake_store = AsyncMock()
     fake_store.list_pages = AsyncMock(return_value=[])
@@ -612,17 +584,13 @@ async def test_find_facts_clamps_limit_to_max(registered_tools, monkeypatch) -> 
     assert len(floored) == 1
 
 
-async def test_find_facts_empty_query_returns_empty(
-    registered_tools, monkeypatch
-) -> None:
+async def test_find_facts_empty_query_returns_empty(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     with patch(
         "beever_atlas.infra.channel_access.assert_channel_access",
         new=AsyncMock(),
     ):
-        result = await registered_tools["find_facts"](
-            channel_id="C1", query="", ctx=_make_ctx()
-        )
+        result = await registered_tools["find_facts"](channel_id="C1", query="", ctx=_make_ctx())
     assert result == []
 
 
@@ -687,9 +655,7 @@ async def test_read_provenance_returns_error_for_unknown_fact(
     }
 
 
-async def test_read_provenance_tolerates_missing_raw_message(
-    registered_tools, monkeypatch
-) -> None:
+async def test_read_provenance_tolerates_missing_raw_message(registered_tools, monkeypatch) -> None:
     """When the chat store can't resolve the source message, we still
     return a structured citation block — only ``raw_message`` is empty."""
     _patch_principal(monkeypatch, "mcp:agent-1")
@@ -725,9 +691,7 @@ async def test_read_provenance_tolerates_missing_raw_message(
 # ---------------------------------------------------------------------------
 
 
-async def test_round6_tools_reject_missing_principal(
-    registered_tools, monkeypatch
-) -> None:
+async def test_round6_tools_reject_missing_principal(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, None)
     ctx = _make_ctx(principal_id="")
 
@@ -770,18 +734,19 @@ def _section(
     return {
         "anchor": anchor,
         "heading": heading,
-        "paragraphs": list(paragraphs or [
-            {"text": "The team adopted Authlib.", "citations": ["f_1"], "is_inference": False},
-        ]),
+        "paragraphs": list(
+            paragraphs
+            or [
+                {"text": "The team adopted Authlib.", "citations": ["f_1"], "is_inference": False},
+            ]
+        ),
         "citations": list(citations or ["f_1"]),
         "visual": visual,
         "citation_coverage": 1.0,
     }
 
 
-async def test_read_wiki_section_returns_section_payload(
-    registered_tools, monkeypatch
-) -> None:
+async def test_read_wiki_section_returns_section_payload(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     page = _wiki_page(
         narrative_sections=[
@@ -790,7 +755,11 @@ async def test_read_wiki_section_returns_section_payload(
                 anchor="alternatives",
                 heading="Alternatives rejected",
                 paragraphs=[
-                    {"text": "FastAPI was considered.", "citations": ["f_2"], "is_inference": False},
+                    {
+                        "text": "FastAPI was considered.",
+                        "citations": ["f_2"],
+                        "is_inference": False,
+                    },
                 ],
                 citations=["f_2"],
             ),
@@ -892,9 +861,7 @@ async def test_read_wiki_section_returns_narrative_not_available_when_empty(
     assert "read_wiki_page" in result.get("suggestion", "")
 
 
-async def test_read_wiki_section_returns_page_not_found(
-    registered_tools, monkeypatch
-) -> None:
+async def test_read_wiki_section_returns_page_not_found(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     fake_store = AsyncMock()
     fake_store.get_page_by_slug = AsyncMock(return_value=None)
@@ -922,9 +889,7 @@ async def test_read_wiki_section_returns_page_not_found(
     }
 
 
-async def test_read_wiki_section_denies_unauthorized_channel(
-    registered_tools, monkeypatch
-) -> None:
+async def test_read_wiki_section_denies_unauthorized_channel(registered_tools, monkeypatch) -> None:
     _patch_principal(monkeypatch, "mcp:agent-1")
     with patch(
         "beever_atlas.infra.channel_access.assert_channel_access",

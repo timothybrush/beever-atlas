@@ -15,6 +15,7 @@ This removes the need for operators to also set
 connection config. Adding a self-hosted Mattermost via the UI now
 automatically grants its host file-proxy coverage.
 """
+
 from __future__ import annotations
 
 import logging

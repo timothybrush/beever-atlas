@@ -413,11 +413,15 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     [data, filters],
   );
 
-  // Selection handler in a ref — cytoscape mount effect never depends on it.
+  // Selection handler — kept in a ref so the cytoscape mount effect can
+  // call the latest closure without re-mounting on every state update.
+  // The ref is updated inside ``useEffect`` rather than during render so
+  // ESLint's ``react-hooks/refs`` rule (which forbids ref writes during
+  // render to prevent cascading update loops) is satisfied.
   const handleNodeTapRef = useRef<(nodeData: Record<string, unknown>) => void>(
     () => undefined,
   );
-  handleNodeTapRef.current = useCallback((nodeData: Record<string, unknown>) => {
+  const handleNodeTap = useCallback((nodeData: Record<string, unknown>) => {
     if (!nodeData || !nodeData.id) {
       setSelection(null);
       return;
@@ -435,11 +439,14 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     }
     setSelection(sel);
   }, [channelId, navigate]);
+  useEffect(() => {
+    handleNodeTapRef.current = handleNodeTap;
+  }, [handleNodeTap]);
 
   const handleNodeDoubleTapRef = useRef<(nodeData: Record<string, unknown>) => void>(
     () => undefined,
   );
-  handleNodeDoubleTapRef.current = useCallback(
+  const handleNodeDoubleTap = useCallback(
     (nodeData: Record<string, unknown>) => {
       if (!nodeData || !nodeData.id || !channelId) return;
       const fakeNode: WikiGraphNode = { data: nodeData as WikiGraphNode["data"] };
@@ -451,6 +458,9 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
     },
     [channelId, navigate],
   );
+  useEffect(() => {
+    handleNodeDoubleTapRef.current = handleNodeDoubleTap;
+  }, [handleNodeDoubleTap]);
 
   const elements = useMemo(
     () => (filtered ? buildElements(filtered) : []),

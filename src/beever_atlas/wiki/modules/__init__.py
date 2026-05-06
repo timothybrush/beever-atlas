@@ -103,6 +103,7 @@ def _has_timeline(min_events: int, min_span_days: int) -> SelectionPredicate:
             int(s.get("event_count", 0)) >= min_events
             and int(s.get("event_span_days", 0)) >= min_span_days
         )
+
     return pred
 
 
@@ -128,6 +129,7 @@ def _has_entity_graph(min_entities: int, min_edges: int) -> SelectionPredicate:
             int(s.get("entity_count", 0)) >= min_entities
             and int(s.get("entity_edge_count", 0)) >= min_edges
         )
+
     return pred
 
 
@@ -144,10 +146,8 @@ def _has_related_threads(min_score: float) -> SelectionPredicate:
         related = s.get("related_topics") or []
         if not isinstance(related, list):
             return False
-        return any(
-            isinstance(r, dict) and float(r.get("score", 0.0)) >= min_score
-            for r in related
-        )
+        return any(isinstance(r, dict) and float(r.get("score", 0.0)) >= min_score for r in related)
+
     return pred
 
 
@@ -188,33 +188,38 @@ def _is_folder_with_min_children(n: int) -> SelectionPredicate:
     "folder" AND the folder has at least ``n`` direct children. Used by
     the folder-specific dashboard modules (``folder_stats``,
     ``top_contributors``, ``cross_cutting_decisions``)."""
+
     def pred(s: dict[str, Any]) -> bool:
         return (
-            str(s.get("archetype") or "").lower() == "folder"
-            and int(s.get("child_count", 0)) >= n
+            str(s.get("archetype") or "").lower() == "folder" and int(s.get("child_count", 0)) >= n
         )
+
     return pred
 
 
 def _is_folder_with_min_contributors(n: int) -> SelectionPredicate:
     """Eligible only when archetype is ``folder`` AND the descendant
     aggregate has at least ``n`` distinct contributors."""
+
     def pred(s: dict[str, Any]) -> bool:
         return (
             str(s.get("archetype") or "").lower() == "folder"
             and int(s.get("distinct_contributor_count", 0)) >= n
         )
+
     return pred
 
 
 def _is_folder_with_min_decisions(n: int) -> SelectionPredicate:
     """Eligible only when archetype is ``folder`` AND the descendant
     aggregate has at least ``n`` decision-typed facts."""
+
     def pred(s: dict[str, Any]) -> bool:
         return (
             str(s.get("archetype") or "").lower() == "folder"
             and int(s.get("descendant_decision_count", 0)) >= n
         )
+
     return pred
 
 

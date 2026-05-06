@@ -494,9 +494,7 @@ class Settings(BaseSettings):
     # is alive" framing. The maintainer is incremental-only and cannot
     # produce the initial structure plan; this flag bridges that gap.
     # Disable to revert to the manual-first-build flow.
-    wiki_auto_initial_build: bool = Field(
-        default=True, alias="WIKI_AUTO_INITIAL_BUILD"
-    )
+    wiki_auto_initial_build: bool = Field(default=True, alias="WIKI_AUTO_INITIAL_BUILD")
 
     # Minimum extracted-fact count before auto-initial-build fires. A
     # one-fact wiki is worse than no wiki — wait for enough signal to
@@ -558,9 +556,7 @@ class Settings(BaseSettings):
     # heuristic candidate signals don't accumulate enough evidence to
     # be reliable. Operators can lower it for testing on small
     # channels but the default is conservative.
-    wiki_min_topics_for_folders: int = Field(
-        default=8, alias="WIKI_MIN_TOPICS_FOR_FOLDERS"
-    )
+    wiki_min_topics_for_folders: int = Field(default=8, alias="WIKI_MIN_TOPICS_FOR_FOLDERS")
 
     # Per-kind drift-A/B sample rate (§8.1). The legacy ``WIKI_DRIFT_AB``
     # rate-limiter applies only to the legacy single-prompt comparison;
@@ -579,9 +575,7 @@ class Settings(BaseSettings):
     # when Jaccard similarity exceeds this threshold. Operator approves
     # via the curation UI (no auto-merge — proposals only). 0.70 starts
     # conservative; tune up if false-positive rate exceeds 1/week.
-    wiki_page_merge_threshold: float = Field(
-        default=0.70, alias="WIKI_PAGE_MERGE_THRESHOLD"
-    )
+    wiki_page_merge_threshold: float = Field(default=0.70, alias="WIKI_PAGE_MERGE_THRESHOLD")
 
     # Single-tenant compatibility mode for the v1.0 OSS launch. When True,
     # any authenticated user principal is granted access to channels whose

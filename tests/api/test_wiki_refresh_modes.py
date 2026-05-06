@@ -94,9 +94,7 @@ async def test_refresh_mode_update_does_not_force_restructure(
     captured: list = []
     patches, fake_cache = _patch_refresh_deps(background_capture=captured)
     with patches[0], patches[1], patches[2]:
-        resp = await client.post(
-            "/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=update"
-        )
+        resp = await client.post("/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=update")
     assert resp.status_code == 202
     body = resp.json()
     assert body["mode"] == "update"
@@ -120,9 +118,7 @@ async def test_refresh_mode_reorganize_forces_restructure_no_wipe(
     captured: list = []
     patches, fake_cache = _patch_refresh_deps(background_capture=captured)
     with patches[0], patches[1], patches[2]:
-        resp = await client.post(
-            "/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=reorganize"
-        )
+        resp = await client.post("/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=reorganize")
     assert resp.status_code == 202
     body = resp.json()
     assert body["mode"] == "reorganize"
@@ -153,13 +149,9 @@ async def test_refresh_mode_rebuild_archives_synchronously_defers_wipe(
     would be left with an empty wiki and no UI affordance to restore."""
     captured: list = []
     existing = {"channel_id": "C_MOCK_GENERAL", "pages": {"x": {"title": "X"}}}
-    patches, fake_cache = _patch_refresh_deps(
-        existing_wiki=existing, background_capture=captured
-    )
+    patches, fake_cache = _patch_refresh_deps(existing_wiki=existing, background_capture=captured)
     with patches[0], patches[1], patches[2]:
-        resp = await client.post(
-            "/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=rebuild"
-        )
+        resp = await client.post("/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=rebuild")
     assert resp.status_code == 202
     body = resp.json()
     assert body["mode"] == "rebuild"
@@ -187,13 +179,9 @@ async def test_refresh_mode_rebuild_skips_archive_when_no_existing(
     and ``force_restructure=True``. Defensive check for first-time
     channels."""
     captured: list = []
-    patches, fake_cache = _patch_refresh_deps(
-        existing_wiki=None, background_capture=captured
-    )
+    patches, fake_cache = _patch_refresh_deps(existing_wiki=None, background_capture=captured)
     with patches[0], patches[1], patches[2]:
-        resp = await client.post(
-            "/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=rebuild"
-        )
+        resp = await client.post("/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=rebuild")
     assert resp.status_code == 202
     fake_cache.version_store.archive.assert_not_called()
     fake_cache.delete_wiki.assert_not_called()
@@ -212,9 +200,7 @@ async def test_refresh_legacy_restructure_param_maps_to_reorganize(
     captured: list = []
     patches, fake_cache = _patch_refresh_deps(background_capture=captured)
     with patches[0], patches[1], patches[2]:
-        resp = await client.post(
-            "/api/channels/C_MOCK_GENERAL/wiki/refresh?restructure=true"
-        )
+        resp = await client.post("/api/channels/C_MOCK_GENERAL/wiki/refresh?restructure=true")
     assert resp.status_code == 202
     body = resp.json()
     assert body["mode"] == "reorganize"
@@ -234,9 +220,7 @@ async def test_refresh_unknown_mode_falls_back_to_update(
     captured: list = []
     patches, fake_cache = _patch_refresh_deps(background_capture=captured)
     with patches[0], patches[1], patches[2]:
-        resp = await client.post(
-            "/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=foo"
-        )
+        resp = await client.post("/api/channels/C_MOCK_GENERAL/wiki/refresh?mode=foo")
     assert resp.status_code == 202
     body = resp.json()
     assert body["mode"] == "update"
@@ -265,11 +249,9 @@ async def test_run_generation_wipes_inside_task_when_flag_set() -> None:
     fake_builder.refresh_wiki = AsyncMock()
 
     call_order: list[str] = []
-    fake_cache.delete_wiki.side_effect = (
-        lambda *a, **kw: call_order.append("delete_wiki") or True
-    )
-    fake_builder.refresh_wiki.side_effect = (
-        lambda *a, **kw: call_order.append("refresh_wiki") or None
+    fake_cache.delete_wiki.side_effect = lambda *a, **kw: call_order.append("delete_wiki") or True
+    fake_builder.refresh_wiki.side_effect = lambda *a, **kw: (
+        call_order.append("refresh_wiki") or None
     )
 
     await _run_generation(
@@ -282,9 +264,7 @@ async def test_run_generation_wipes_inside_task_when_flag_set() -> None:
     )
 
     assert call_order == ["delete_wiki", "refresh_wiki"]
-    fake_cache.delete_wiki.assert_awaited_once_with(
-        "C_MOCK_GENERAL", target_lang="en"
-    )
+    fake_cache.delete_wiki.assert_awaited_once_with("C_MOCK_GENERAL", target_lang="en")
     fake_builder.refresh_wiki.assert_awaited_once_with(
         "C_MOCK_GENERAL", target_lang="en", force_restructure=True
     )

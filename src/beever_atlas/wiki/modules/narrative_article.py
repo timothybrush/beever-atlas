@@ -41,9 +41,7 @@ _MERMAID_CHAIN_RE = re.compile(
     rf"({_MERMAID_NODE_TOKEN})"
     rf"((?:\s*(?:{_MERMAID_ARROW_TOKEN})\s*{_MERMAID_NODE_TOKEN}){{2,}})"
 )
-_MERMAID_TOKEN_RE = re.compile(
-    rf"({_MERMAID_NODE_TOKEN})|({_MERMAID_ARROW_TOKEN})"
-)
+_MERMAID_TOKEN_RE = re.compile(rf"({_MERMAID_NODE_TOKEN})|({_MERMAID_ARROW_TOKEN})")
 
 
 def _clean_mermaid_content(content: str) -> str:
@@ -65,7 +63,9 @@ def _clean_mermaid_content(content: str) -> str:
     # --- 2. Split chained arrows ---
     def _split_chain(m: re.Match[str]) -> str:
         # findall returns (node_group, arrow_group) tuples; pick whichever matched.
-        tokens: list[str] = [node or arrow for node, arrow in _MERMAID_TOKEN_RE.findall(m.group(0)) if node or arrow]
+        tokens: list[str] = [
+            node or arrow for node, arrow in _MERMAID_TOKEN_RE.findall(m.group(0)) if node or arrow
+        ]
         if len(tokens) < 5:
             return m.group(0)
         lines: list[str] = []

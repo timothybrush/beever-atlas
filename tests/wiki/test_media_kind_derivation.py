@@ -7,6 +7,7 @@ Without correct kind inference, the planner buckets these as "file"
 and the frontend renders them as plain text links instead of
 ``<img>``/``<video>``/PDF preview cards.
 """
+
 from __future__ import annotations
 
 from beever_atlas.models.domain import AtomicFact

@@ -78,9 +78,7 @@ def test_apply_folder_plan_moves_leaves_into_folder() -> None:
         ]
     )
     plan = PlannedStructure(
-        folders=[
-            PlannedFolder(slug="security", title="Security", child_slugs=["auth", "rbac"])
-        ],
+        folders=[PlannedFolder(slug="security", title="Security", child_slugs=["auth", "rbac"])],
         leaves=["marketing"],
     )
     folder_pages = {
@@ -117,9 +115,7 @@ def test_apply_folder_plan_no_folders_is_noop() -> None:
     """Empty plan returns the structure unchanged."""
     structure = _make_flat_structure([("a", "A"), ("b", "B")])
     plan = PlannedStructure(folders=[], leaves=["a", "b"])
-    out = WikiCompiler.apply_folder_plan_to_structure(
-        structure, plan=plan, folder_pages={}
-    )
+    out = WikiCompiler.apply_folder_plan_to_structure(structure, plan=plan, folder_pages={})
     assert out is structure  # same object — no rearrangement
 
 
@@ -166,9 +162,7 @@ async def test_compile_folders_handles_nested_folders() -> None:
         return CompiledPageContent(content="x <<CHILDREN_TOC>>", summary="s")
 
     compiler._call_llm = _fake_call_llm  # type: ignore[method-assign]
-    folder_pages = await compiler.compile_folders(
-        plan=plan, leaves_by_slug=leaves_by_slug
-    )
+    folder_pages = await compiler.compile_folders(plan=plan, leaves_by_slug=leaves_by_slug)
     # All 3 folders should be produced — outer + 2 inners.
     assert "folder-project" in folder_pages
     assert "folder-security" in folder_pages
@@ -235,9 +229,7 @@ def test_apply_folder_plan_skips_folder_with_unknown_children() -> None:
     the folder is silently skipped (its children stay at root)."""
     structure = _make_flat_structure([("a", "A"), ("b", "B")])
     plan = PlannedStructure(
-        folders=[
-            PlannedFolder(slug="ghost", title="Ghost", child_slugs=["does-not-exist"])
-        ],
+        folders=[PlannedFolder(slug="ghost", title="Ghost", child_slugs=["does-not-exist"])],
         leaves=["a", "b"],
     )
     folder_pages = {
@@ -278,14 +270,62 @@ async def test_full_planner_to_structure_round_trip() -> None:
     """
     # Realistic clusters with UUID-style ids and human titles.
     clusters = [
-        {"id": "uuid-aaaa", "title": "Beever Atlas Documentation", "summary": "x", "member_count": 10, "key_entities": []},
-        {"id": "uuid-bbbb", "title": "Beever Atlas GitHub Repository", "summary": "x", "member_count": 12, "key_entities": []},
-        {"id": "uuid-cccc", "title": "Marketing Funnel", "summary": "x", "member_count": 8, "key_entities": []},
-        {"id": "uuid-dddd", "title": "Sales Pipeline", "summary": "x", "member_count": 6, "key_entities": []},
-        {"id": "uuid-eeee", "title": "Hiring", "summary": "x", "member_count": 4, "key_entities": []},
-        {"id": "uuid-ffff", "title": "Onboarding", "summary": "x", "member_count": 5, "key_entities": []},
-        {"id": "uuid-gggg", "title": "Performance Reviews", "summary": "x", "member_count": 3, "key_entities": []},
-        {"id": "uuid-hhhh", "title": "Compensation", "summary": "x", "member_count": 7, "key_entities": []},
+        {
+            "id": "uuid-aaaa",
+            "title": "Beever Atlas Documentation",
+            "summary": "x",
+            "member_count": 10,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-bbbb",
+            "title": "Beever Atlas GitHub Repository",
+            "summary": "x",
+            "member_count": 12,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-cccc",
+            "title": "Marketing Funnel",
+            "summary": "x",
+            "member_count": 8,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-dddd",
+            "title": "Sales Pipeline",
+            "summary": "x",
+            "member_count": 6,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-eeee",
+            "title": "Hiring",
+            "summary": "x",
+            "member_count": 4,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-ffff",
+            "title": "Onboarding",
+            "summary": "x",
+            "member_count": 5,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-gggg",
+            "title": "Performance Reviews",
+            "summary": "x",
+            "member_count": 3,
+            "key_entities": [],
+        },
+        {
+            "id": "uuid-hhhh",
+            "title": "Compensation",
+            "summary": "x",
+            "member_count": 7,
+            "key_entities": [],
+        },
     ]
 
     # Mimic builder.py's translation: send page slugs (NOT UUIDs) as
@@ -338,9 +378,7 @@ async def test_full_planner_to_structure_round_trip() -> None:
     # page.slug, NOT cluster UUID).
     leaves_by_slug = {
         slug: _make_topic_page(slug, title)
-        for slug, title in zip(
-            page_slugs, [c["title"] for c in clusters], strict=True
-        )
+        for slug, title in zip(page_slugs, [c["title"] for c in clusters], strict=True)
     }
 
     # Run compile_folders — this is where the slug/id mismatch would
@@ -358,9 +396,7 @@ async def test_full_planner_to_structure_round_trip() -> None:
 
     compiler._call_llm = _fake_call_llm  # type: ignore[method-assign]
 
-    folder_pages = await compiler.compile_folders(
-        plan=plan, leaves_by_slug=leaves_by_slug
-    )
+    folder_pages = await compiler.compile_folders(plan=plan, leaves_by_slug=leaves_by_slug)
 
     # CRITICAL: the folder MUST have non-empty children. The bug was
     # that compile_folders received UUID-keyed slug lookups and produced
@@ -388,9 +424,7 @@ async def test_full_planner_to_structure_round_trip() -> None:
         structure, plan=plan, folder_pages=folder_pages
     )
     assert len(out_structure.pages) == 7  # 1 folder + 6 leaves
-    folder_node = next(
-        n for n in out_structure.pages if n.page_type == "folder"
-    )
+    folder_node = next(n for n in out_structure.pages if n.page_type == "folder")
     assert folder_node.slug == "beever-atlas"
     assert len(folder_node.children) == 2
     # Section numbers reflect the new tree.

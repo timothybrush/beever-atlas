@@ -131,12 +131,7 @@ def build_key_facts_data(facts: list[dict] | None) -> dict[str, Any]:
     for f in facts:
         if not isinstance(f, dict):
             continue
-        body = (
-            f.get("memory_text")
-            or f.get("fact")
-            or f.get("text")
-            or ""
-        )
+        body = f.get("memory_text") or f.get("fact") or f.get("text") or ""
         # Strip <untrusted>/<sanitized>/<external> wrappers before the
         # text crosses to the frontend. The orchestrator wraps fact
         # text for LLM-context defense; the wrappers must NOT survive
@@ -145,28 +140,10 @@ def build_key_facts_data(facts: list[dict] | None) -> dict[str, Any]:
         title = _first_sentence(body)
         importance = _normalize_importance(f.get("importance"))
         fact_type = _normalize_fact_type(f.get("fact_type") or f.get("type"))
-        author_name = (
-            f.get("author_name")
-            or f.get("user_name")
-            or f.get("author")
-            or ""
-        )
-        author_id = (
-            f.get("author_id")
-            or f.get("user_id")
-            or ""
-        )
-        ts = (
-            f.get("message_ts")
-            or f.get("timestamp")
-            or f.get("date")
-            or ""
-        )
-        source_url = (
-            f.get("permalink")
-            or f.get("source_url")
-            or ""
-        )
+        author_name = f.get("author_name") or f.get("user_name") or f.get("author") or ""
+        author_id = f.get("author_id") or f.get("user_id") or ""
+        ts = f.get("message_ts") or f.get("timestamp") or f.get("date") or ""
+        source_url = f.get("permalink") or f.get("source_url") or ""
         platform = f.get("platform") or ""
         citations = f.get("citations") or []
         if not isinstance(citations, list):

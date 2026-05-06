@@ -79,7 +79,7 @@ def attempt_rewrite(text: str, author_name: str = "") -> tuple[str, bool]:
     prefix_match = _AUTHOR_PREFIX_RE.match(text)
     if prefix_match:
         # Drop "<Name> " opener so the verb starts the residual string
-        author_stripped = text[prefix_match.start(2):]
+        author_stripped = text[prefix_match.start(2) :]
 
     # Pattern 1: "shared a link to <X>" / "shared a repository for <X>" /
     #            "shared a Neo4j blog post titled <X>"

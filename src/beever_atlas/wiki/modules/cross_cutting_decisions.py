@@ -48,12 +48,7 @@ def _fact_type(fact: Any) -> str:
 def _author_name(fact: Any) -> str:
     if not isinstance(fact, dict):
         return ""
-    return str(
-        fact.get("author_name")
-        or fact.get("user_name")
-        or fact.get("author")
-        or ""
-    ).strip()
+    return str(fact.get("author_name") or fact.get("user_name") or fact.get("author") or "").strip()
 
 
 def _importance_label(value: Any) -> str:
@@ -121,22 +116,14 @@ def build_cross_cutting_decisions_data(
             if _fact_type(f) != "decision":
                 continue
             body = _strip_safety_markers(
-                f.get("memory_text")
-                or f.get("fact")
-                or f.get("text")
-                or ""
+                f.get("memory_text") or f.get("fact") or f.get("text") or ""
             )
             title = _first_sentence(body)
             if not title:
                 continue
             fact_id = str(f.get("fact_id") or f.get("id") or "")
             decided_at = _iso_date(
-                str(
-                    f.get("message_ts")
-                    or f.get("timestamp")
-                    or f.get("date")
-                    or ""
-                )
+                str(f.get("message_ts") or f.get("timestamp") or f.get("date") or "")
             )
             decisions.append(
                 {

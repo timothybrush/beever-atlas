@@ -12,6 +12,7 @@ These tests exercise:
   - happy-path round-trip when every field IS populated
   - serialize round-trip preserves the structured data
 """
+
 from __future__ import annotations
 
 import json

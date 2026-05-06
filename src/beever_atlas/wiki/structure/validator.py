@@ -149,9 +149,7 @@ def validate_plan(plan: object, expected_cluster_slugs: set[str]) -> None:
     # A→B→A makes both A and B "non-root" so the roots loop above
     # would silently skip the whole component. Walking every folder
     # ensures cycles always raise even when isolated from any root.
-    referenced_as_child = {
-        c for children in folder_children.values() for c in children
-    }
+    referenced_as_child = {c for children in folder_children.values() for c in children}
     roots = [s for s in folder_children if s not in referenced_as_child]
     max_depth = 1  # leaves at root start at depth 1
     for root in roots:

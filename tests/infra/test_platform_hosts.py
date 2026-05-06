@@ -6,6 +6,7 @@ its hostname to flow into both proxy allowlists (``infra.http_safe`` for
 ``/api/files/proxy`` and ``api.media`` for ``/api/media/proxy``)
 without any operator-side env var.
 """
+
 from __future__ import annotations
 
 import pytest
