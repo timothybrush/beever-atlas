@@ -498,11 +498,17 @@ function renderPage(
 export function WikiTab() {
   const { id: channelId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  // Null-safe outlet destructure — ``useOutletContext`` returns ``null``
+  // when the component is rendered outside an ``<Outlet context={...}>``
+  // (e.g., the vitest harness in WikiTab.test.tsx). Without the ``?? {}``
+  // fallback, a plain destructure crashes with "Cannot destructure
+  // property 'triggerSync' of ... as it is null". Same defensive pattern
+  // TierBrowser.tsx uses.
   const { triggerSync, isSyncing, syncState } = useOutletContext<{
     triggerSync?: () => Promise<void>;
     isSyncing?: boolean;
     syncState?: SyncState;
-  }>();
+  }>() ?? {};
   // ``?page={pageId}`` deep-link — seeded on mount, supports the
   // "Open in Wiki tab" button on the wiki graph view's preview panel.
   // The state-setter below clears the param when the user navigates

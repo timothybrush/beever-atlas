@@ -238,4 +238,14 @@ async def maybe_trigger_initial_build(
                 "wiki_auto_initial_build: failed-status update also failed channel=%s",
                 channel_id,
             )
+    finally:
+        # Evict the per-channel lock now that the (one-shot) initial build
+        # has completed. Without this, ``_BUILD_LOCKS`` grows unboundedly
+        # in a long-running server with many channels — small per entry
+        # (~120B) but objectionable for a process that runs for weeks.
+        # The lock is only ever needed during the very first build per
+        # channel; subsequent ``maybe_trigger_initial_build`` calls
+        # short-circuit at the status / wiki-existence gates without
+        # taking the lock.
+        _BUILD_LOCKS.pop(channel_id, None)
     return True

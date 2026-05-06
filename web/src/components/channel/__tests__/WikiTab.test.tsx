@@ -103,7 +103,13 @@ describe("WikiTab — empty-state smoke test", () => {
   it("renders the empty-state without crashing when channel has no memories", async () => {
     expect(() => renderTab()).not.toThrow();
     await waitFor(() => {
-      expect(screen.getByText(/sync this channel first/i)).toBeInTheDocument();
+      // ``useWiki`` mock returns ``isNotFound: true`` so the 404
+      // ``PipelineEmptyState`` branch (WikiTab.tsx:905) renders with
+      // title "Build your channel wiki". The test's value is the
+      // no-crash assertion above; the text match below is just
+      // confirmation that the empty-state branch was rendered (not
+      // the loading skeleton or an unrelated error path).
+      expect(screen.getByText(/build your channel wiki/i)).toBeInTheDocument();
     });
   });
 });
