@@ -394,7 +394,15 @@ export function ChannelWorkspace() {
         </div>
       ) : isMember ? (
         <div className="flex-1 min-h-0 relative bg-muted/10 overflow-hidden" key={activeTab}>
-          <Outlet context={{ syncState, isSyncing, connectionId: channel?.connection_id ?? null }} />
+          <Outlet
+            context={{
+              syncState,
+              isSyncing,
+              triggerSync,
+              syncError,
+              connectionId: channel?.connection_id ?? null,
+            }}
+          />
           {/* Floating Ask button — icon FAB that expands on hover */}
           <button
             onClick={() => navigate(`/ask?context=${id}`)}

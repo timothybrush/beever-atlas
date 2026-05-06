@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import type { MemoryTier2 } from "@/lib/types";
 
@@ -35,6 +35,8 @@ export function useMemories(channelId: string, page = 1, limit = 50) {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+  const [fetchKey, setFetchKey] = useState(0);
+  const refetch = useCallback(() => setFetchKey((k) => k + 1), []);
 
   useEffect(() => {
     if (!channelId) {
@@ -61,7 +63,7 @@ export function useMemories(channelId: string, page = 1, limit = 50) {
       })
       .catch((err: Error) => setError(err))
       .finally(() => setIsLoading(false));
-  }, [channelId, page, limit, filters.topic, filters.entity, filters.minImportance]);
+  }, [channelId, page, limit, filters.topic, filters.entity, filters.minImportance, fetchKey]);
 
   // Derive summary and clusters stubs for backward compat
   const summary = {
@@ -85,5 +87,6 @@ export function useMemories(channelId: string, page = 1, limit = 50) {
     setFilters,
     isLoading,
     error,
+    refetch,
   };
 }

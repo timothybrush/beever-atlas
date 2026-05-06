@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import { Check } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 export interface PipelineStep {
   label: string;
@@ -13,6 +14,14 @@ interface PipelineEmptyStateProps {
   title: string;
   description: string;
   steps: PipelineStep[];
+  primaryActionLabel?: string;
+  onPrimaryAction?: () => void;
+  primaryActionDisabled?: boolean;
+  primaryActionLoading?: boolean;
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
+  secondaryActionVariant?: "button" | "link";
+  helperText?: string;
   children?: React.ReactNode;
 }
 
@@ -21,13 +30,21 @@ export function PipelineEmptyState({
   title,
   description,
   steps,
+  primaryActionLabel,
+  onPrimaryAction,
+  primaryActionDisabled = false,
+  primaryActionLoading = false,
+  secondaryActionLabel,
+  onSecondaryAction,
+  secondaryActionVariant = "button",
+  helperText,
   children,
 }: PipelineEmptyStateProps) {
   return (
     <div className="flex h-full min-h-0 items-center justify-center px-6 py-12">
-      <div className="mx-auto w-full max-w-xl">
+      <div className="mx-auto w-full max-w-xl motion-safe:animate-rise-in">
         {/* Hero icon with gradient halo */}
-        <div className="relative mx-auto mb-6 flex h-16 w-16 items-center justify-center">
+        <div className="relative mx-auto mb-6 flex h-16 w-16 items-center justify-center motion-safe:animate-scale-in">
           <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 blur-xl" />
           <div className="relative flex h-16 w-16 items-center justify-center rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/15 to-primary/5 shadow-sm">
             <Icon className="h-7 w-7 text-primary" />
@@ -67,10 +84,11 @@ export function PipelineEmptyState({
               return (
                 <div
                   key={step.label}
-                  className="relative z-10 flex flex-1 flex-col items-center gap-2"
+                  className="relative z-10 flex flex-1 flex-col items-center gap-2 motion-safe:animate-fade-in"
+                  style={{ animationDelay: `${Math.min(idx, 5) * 70}ms` }}
                 >
                   <div
-                    className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all ${
+                    className={`flex h-10 w-10 items-center justify-center rounded-full border-2 transition-all duration-300 ease-out ${
                       state === "done"
                         ? "border-emerald-500 bg-emerald-500 text-white shadow-sm"
                         : state === "active"
@@ -112,8 +130,38 @@ export function PipelineEmptyState({
           </div>
         </div>
 
-        {children && (
-          <div className="mt-8 flex flex-col items-center gap-3">{children}</div>
+        {(primaryActionLabel || secondaryActionLabel || helperText || children) && (
+          <div className="mt-8 flex flex-col items-center gap-3">
+            {primaryActionLabel && onPrimaryAction && (
+              <Button
+                size="lg"
+                onClick={onPrimaryAction}
+                disabled={primaryActionDisabled || primaryActionLoading}
+                className={`px-5 transition-all duration-200 ${primaryActionLoading ? "motion-safe:animate-pulse" : ""}`}
+              >
+                {primaryActionLoading ? "Syncing..." : primaryActionLabel}
+              </Button>
+            )}
+            {secondaryActionLabel && onSecondaryAction && (
+              secondaryActionVariant === "link" ? (
+                <button
+                  type="button"
+                  onClick={onSecondaryAction}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {secondaryActionLabel}
+                </button>
+              ) : (
+                <Button variant="outline" size="sm" onClick={onSecondaryAction}>
+                  {secondaryActionLabel}
+                </Button>
+              )
+            )}
+            {helperText && (
+              <p className="text-xs text-muted-foreground">{helperText}</p>
+            )}
+            {children}
+          </div>
         )}
       </div>
     </div>

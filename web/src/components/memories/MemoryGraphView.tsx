@@ -14,6 +14,10 @@ const MEDIA_TYPES = new Set(["Link", "Document", "Image", "Media"]);
 
 interface Props {
   channelId: string;
+  refreshNonce?: number;
+  onSyncNow?: () => Promise<void>;
+  isSyncing?: boolean;
+  onViewSyncHistory?: () => void;
 }
 
 // ─── TypePill ────────────────────────────────────────────────────────────────
@@ -59,8 +63,14 @@ function TypePill({
  * Filters live in a collapsible left floating panel — no top filter bar —
  * so the canvas gets the full vertical height below the segmented toggle.
  */
-export function MemoryGraphView({ channelId }: Props) {
-  const { entities, relationships, loading, error } = useGraph(channelId);
+export function MemoryGraphView({
+  channelId,
+  refreshNonce = 0,
+  onSyncNow,
+  isSyncing = false,
+  onViewSyncHistory,
+}: Props) {
+  const { entities, relationships, loading, error, refetch } = useGraph(channelId);
   const { hasMemories, isLoading: isMemoryCountLoading } = useChannelMemoryCount(channelId);
   const [visibleTypes, setVisibleTypes] = useState<string[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -87,6 +97,12 @@ export function MemoryGraphView({ channelId }: Props) {
     setVisibleTypes(entityTypes);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entities]);
+
+  useEffect(() => {
+    if (refreshNonce > 0) {
+      refetch();
+    }
+  }, [refreshNonce, refetch]);
 
   const selectedEntity = selectedId
     ? entities.find((e) => e.id === selectedId) ?? null
@@ -136,14 +152,21 @@ export function MemoryGraphView({ channelId }: Props) {
     ];
     return (
       <PipelineEmptyState
-        icon={isNoMemory ? FolderSync : Network}
-        title={isNoMemory ? "Sync this channel first" : "No entities yet"}
+        icon={Network}
+        title={isNoMemory ? "Map relationships in this channel" : "No entities yet"}
         description={
           isNoMemory
-            ? "The graph visualizes entities extracted from channel memories. Sync this channel to unlock it."
+            ? "See people, projects, and technologies connect in one visual knowledge graph."
             : "Entities will appear here once this channel's memories are consolidated into a knowledge graph."
         }
         steps={steps}
+        primaryActionLabel={isNoMemory ? "Sync Channel Now" : undefined}
+        onPrimaryAction={isNoMemory && onSyncNow ? () => void onSyncNow() : undefined}
+        primaryActionDisabled={!onSyncNow || isSyncing}
+        primaryActionLoading={isSyncing}
+        secondaryActionLabel={isNoMemory ? "View sync history" : undefined}
+        onSecondaryAction={isNoMemory ? onViewSyncHistory : undefined}
+        secondaryActionVariant="link"
       />
     );
   }

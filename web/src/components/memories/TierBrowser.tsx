@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
-import { RefreshCw, Sparkles, Brain, Network, Layers, FileText, Zap } from "lucide-react";
+import { useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { RefreshCw, Sparkles, Brain, Network, Layers, FileText, Zap, FolderSync } from "lucide-react";
 import { useMemories } from "@/hooks/useMemories";
 import { useTopics } from "@/hooks/useTopics";
 import { useChannelSummary } from "@/hooks/useChannelSummary";
+import { useChannelMemoryCount } from "@/hooks/useChannelMemoryCount";
 import { api, ApiError } from "@/lib/api";
 import { MemoryFilters } from "./MemoryFilters";
 import { FactCard } from "./FactCard";
@@ -12,6 +13,8 @@ import { ClusterCard } from "./ClusterCard";
 import { MemoryGraphView } from "./MemoryGraphView";
 import { SegmentedToggle } from "@/components/shared/SegmentedToggle";
 import { ViewExplainerButton, type ExplainerSection } from "@/components/shared/ViewExplainerButton";
+import { PipelineEmptyState } from "@/components/shared/PipelineEmptyState";
+import type { SyncState } from "@/hooks/useSync";
 
 type View = "memory" | "graph";
 
@@ -95,6 +98,12 @@ const VIEW_EXPLAINER_SECTIONS: ExplainerSection[] = [
 
 export function TierBrowser() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const { triggerSync, isSyncing, syncState } = useOutletContext<{
+    triggerSync?: () => Promise<void>;
+    isSyncing?: boolean;
+    syncState?: SyncState;
+  }>();
   const channelId = id ?? "";
   const [searchParams, setSearchParams] = useSearchParams();
   // URL-stateful view toggle so refreshing the page or sharing a link
@@ -112,13 +121,15 @@ export function TierBrowser() {
     setSearchParams(updated, { replace: true });
   };
 
-  const { facts, filters, setFilters, isLoading } = useMemories(channelId);
+  const { facts, filters, setFilters, isLoading, refetch: refetchFacts } = useMemories(channelId);
   const { clusters, isLoading: clustersLoading, error: clustersError, refetch: refetchTopics } = useTopics(channelId);
   const { summary, isLoading: summaryLoading, error: summaryError, refetch: refetchSummary } = useChannelSummary(channelId);
+  const { hasMemories, isLoading: isMemoryCountLoading, refetch: refetchMemoryCount } = useChannelMemoryCount(channelId);
 
   const [consolidating, setConsolidating] = useState(false);
   const [showRefresh, setShowRefresh] = useState(false);
   const [consolidateMsg, setConsolidateMsg] = useState("");
+  const [graphRefreshNonce, setGraphRefreshNonce] = useState(0);
 
   const handleConsolidate = async () => {
     setConsolidating(true);
@@ -136,11 +147,22 @@ export function TierBrowser() {
   };
 
   const handleRefresh = () => {
+    refetchFacts();
     refetchTopics();
     refetchSummary();
+    refetchMemoryCount();
     setShowRefresh(false);
     setConsolidateMsg("");
   };
+
+  useEffect(() => {
+    if (!syncState?.job_id || syncState.state !== "idle") return;
+    refetchFacts();
+    refetchTopics();
+    refetchSummary();
+    refetchMemoryCount();
+    setGraphRefreshNonce((n) => n + 1);
+  }, [syncState?.job_id, syncState?.state, refetchFacts, refetchTopics, refetchSummary, refetchMemoryCount]);
 
   // Graph view is delegated entirely to MemoryGraphView — it owns its
   // own loading / error / empty states. The toggle floats in a slim
@@ -163,7 +185,13 @@ export function TierBrowser() {
           />
         </div>
         <div className="flex-1 min-h-0">
-          <MemoryGraphView channelId={channelId} />
+          <MemoryGraphView
+            channelId={channelId}
+            refreshNonce={graphRefreshNonce}
+            onSyncNow={triggerSync}
+            isSyncing={!!isSyncing}
+            onViewSyncHistory={() => navigate(`/channels/${channelId}/sync-history`)}
+          />
         </div>
       </div>
     );
@@ -187,6 +215,46 @@ export function TierBrowser() {
         </div>
         <div className="p-6 text-center text-base text-muted-foreground">
           Loading memories...
+        </div>
+      </div>
+    );
+  }
+
+  if (!isMemoryCountLoading && !hasMemories) {
+    const steps = [
+      { label: "Sync channel", icon: FolderSync, done: false, active: true },
+      { label: "Extract memory", icon: Sparkles, done: false, active: false },
+      { label: "Organize topics & facts", icon: Brain, done: false, active: false },
+    ];
+    return (
+      <div className="flex flex-col h-full min-h-0">
+        <div className="flex items-center justify-between border-b border-border bg-card/60 px-5 py-2 shrink-0">
+          <SegmentedToggle
+            ariaLabel="Agent Memory view"
+            value={view}
+            options={VIEW_OPTIONS}
+            onChange={setView}
+          />
+          <ViewExplainerButton
+            heading="How agent memory works"
+            sections={VIEW_EXPLAINER_SECTIONS}
+            triggerLabel="Learn what 3-Tier Memory and Memory Graph mean"
+          />
+        </div>
+        <div className="flex-1 min-h-0">
+          <PipelineEmptyState
+            icon={Brain}
+            title="Build team memory"
+            description="Capture what matters from chat: topics, facts, and who knows what."
+            steps={steps}
+            primaryActionLabel="Sync Channel Now"
+            onPrimaryAction={triggerSync ? () => void triggerSync() : undefined}
+            primaryActionDisabled={!triggerSync || !!isSyncing}
+            primaryActionLoading={!!isSyncing}
+            secondaryActionLabel="View sync history"
+            onSecondaryAction={() => navigate(`/channels/${channelId}/sync-history`)}
+            secondaryActionVariant="link"
+          />
         </div>
       </div>
     );
