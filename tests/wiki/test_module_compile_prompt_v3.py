@@ -21,6 +21,7 @@ from __future__ import annotations
 from beever_atlas.wiki.prompts import (
     MODULE_COMPILE_PROMPT_V3,
     build_module_compile_prompt_v3,
+    get_archetype_hint_block,
 )
 
 
@@ -190,3 +191,115 @@ def test_v3_prompt_structurally_distinct_from_v2() -> None:
 
     assert '"narrative_sections":' in MODULE_COMPILE_PROMPT_V3
     assert '"narrative_sections":' not in MODULE_COMPILE_PROMPT
+
+
+# ---------------------------------------------------------------------------
+# Archetype hint blocks (Phase 7 — Session C)
+# ---------------------------------------------------------------------------
+#
+# Decision 2 in ``openspec/changes/wiki-narrative-articles/design.md``:
+# Decision / Tension / Folder / Channel Overview archetypes receive
+# *soft* section-structure hints; Topic archetype gets NO hint —
+# sections come entirely from cluster content. Unknown archetypes
+# return the empty string defensively.
+# ---------------------------------------------------------------------------
+
+
+def test_archetype_hint_block_decision() -> None:
+    """Decision archetype hint enumerates Context/Why/Alternatives/Implications."""
+    block = get_archetype_hint_block("decision")
+    assert "Decision archetype" in block
+    assert "Context" in block
+    assert "Why" in block
+    assert "Alternatives" in block
+    assert "Implications" in block
+    # Soft-hint discipline — block must explicitly tell the LLM to deviate.
+    assert "DEVIATE" in block or "deviate" in block.lower()
+
+
+def test_archetype_hint_block_tension() -> None:
+    """Tension archetype hint frames balanced positions, not a winner."""
+    block = get_archetype_hint_block("tension")
+    assert "Position A" in block
+    assert "Position B" in block
+    assert "EQUAL weight" in block
+
+
+def test_archetype_hint_block_folder() -> None:
+    """Folder archetype hint stresses cross-cutting synthesis across children."""
+    block = get_archetype_hint_block("folder")
+    assert "Cross-cutting" in block
+    assert "synthesize ACROSS" in block
+
+
+def test_archetype_hint_block_channel_overview() -> None:
+    """Channel overview archetype hint covers landmark sections + 5,000-word cap."""
+    block = get_archetype_hint_block("channel_overview")
+    assert "What is" in block
+    assert "Architecture" in block
+    assert "5,000 words" in block
+
+
+def test_archetype_hint_block_overview_alias_matches_channel_overview() -> None:
+    """``overview`` archetype value resolves to the same hint as ``channel_overview``."""
+    assert (
+        get_archetype_hint_block("overview")
+        == get_archetype_hint_block("channel_overview")
+    )
+
+
+def test_archetype_hint_block_topic_returns_empty() -> None:
+    """Topic archetype gets NO template — Decision 2 in the design doc."""
+    assert get_archetype_hint_block("topic") == ""
+
+
+def test_archetype_hint_block_unknown_returns_empty() -> None:
+    """Defensive — unknown archetype returns empty string, never raises."""
+    assert get_archetype_hint_block("nonexistent_archetype") == ""
+    assert get_archetype_hint_block("") == ""
+
+
+def test_archetype_hint_block_case_insensitive() -> None:
+    """Archetype matching is case-insensitive — ``"Decision"`` and ``"DECISION"``
+    return the same block as ``"decision"``."""
+    base = get_archetype_hint_block("decision")
+    assert get_archetype_hint_block("Decision") == base
+    assert get_archetype_hint_block("DECISION") == base
+
+
+def test_v3_prompt_with_decision_archetype_includes_decision_hint() -> None:
+    """End-to-end — building a v3 prompt for a Decision-archetype page
+    embeds the Decision hint block in the rendered output."""
+    decision_hint = get_archetype_hint_block("decision")
+    prompt = build_module_compile_prompt_v3(
+        signals={"fact_count": 9, "archetype": "decision", "decision_count": 3},
+        module_catalog=_minimal_catalog(),
+        title="Adopting Authlib for OAuth",
+        summary="The team picked Authlib over google-auth-oauthlib.",
+        top_facts=[],
+        top_people=[],
+        archetype_hint_block=decision_hint,
+    )
+    # The Decision hint section appears verbatim in the rendered prompt.
+    assert "Decision archetype" in prompt
+    assert "Alternatives rejected" in prompt
+    assert "Open consequences" in prompt
+
+
+def test_v3_prompt_with_topic_archetype_omits_hint_section() -> None:
+    """Topic archetype produces no hint section header in the rendered prompt."""
+    topic_hint = get_archetype_hint_block("topic")
+    assert topic_hint == ""
+    prompt = build_module_compile_prompt_v3(
+        signals={"fact_count": 12, "archetype": "topic"},
+        module_catalog=_minimal_catalog(),
+        title="OpenClaw Integration",
+        summary="Pipeline integrates OpenClaw as a connector.",
+        top_facts=[],
+        top_people=[],
+        archetype_hint_block=topic_hint,
+    )
+    # No archetype-specific section structure hint header is injected.
+    assert "Section structure hint" not in prompt
+    # The structural rest of the prompt is still present.
+    assert "## Module-selection rules" in prompt

@@ -717,6 +717,7 @@ async def compile_topic_page_modular(
     from beever_atlas.wiki.prompts import (
         build_module_compile_prompt,
         build_module_compile_prompt_v3,
+        get_archetype_hint_block,
     )
 
     catalog_view = [
@@ -731,6 +732,14 @@ async def compile_topic_page_modular(
 
     narrative_enabled = _narrative_articles_enabled(channel_config=channel_config)
     if narrative_enabled:
+        # Per-archetype soft hints (Decision 2 in
+        # ``openspec/changes/wiki-narrative-articles/design.md``):
+        # Decision/Tension/Folder/Channel-Overview archetypes get a
+        # suggested section structure; Topic archetype gets the empty
+        # string — sections come entirely from cluster content.
+        archetype_hint = get_archetype_hint_block(
+            str(signals.get("archetype") or "")
+        )
         prompt = build_module_compile_prompt_v3(
             signals=signals,
             module_catalog=catalog_view,
@@ -740,7 +749,7 @@ async def compile_topic_page_modular(
             top_people=top_people,
             date_range_start=date_range_start,
             date_range_end=date_range_end,
-            archetype_hint_block="",  # Session C wires per-archetype hints
+            archetype_hint_block=archetype_hint,
         )
     else:
         prompt = build_module_compile_prompt(

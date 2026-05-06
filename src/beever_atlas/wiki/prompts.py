@@ -909,6 +909,123 @@ The bad example fails on three counts: (1) generic template title, (2) uncited p
 """
 
 
+# ---------------------------------------------------------------------------
+# Archetype hint blocks — soft per-archetype section structure suggestions
+# (Decision 2 in ``openspec/changes/wiki-narrative-articles/design.md``).
+#
+# These are SUGGESTIONS, not templates: every block explicitly tells the LLM
+# to DEVIATE when the cluster's data does not fit the suggested structure.
+# Topic archetype intentionally returns the empty string — sections come
+# entirely from cluster content. Unknown archetypes also return the empty
+# string defensively, so the orchestrator never raises on a new archetype.
+# ---------------------------------------------------------------------------
+
+
+_ARCHETYPE_HINT_DECISION = """## Section structure hint — Decision archetype
+
+This page is centered on a single decision. Decision pages typically work
+well with these sections, but DEVIATE when the data does not fit:
+
+1. **Context** — what was the situation that motivated the decision?
+2. **The decision** — what was decided, by whom, when (1-2 sentences)
+3. **Why** — the rationale; cite the rationale fact_id
+4. **Alternatives rejected** — what else was considered; cite each alternative
+5. **Implications** — what changes downstream because of this decision
+6. **Open consequences** — unresolved questions or effects to monitor
+
+If your data doesn't support 6 sections, pick the 3-4 that fit. Do NOT
+fabricate sections to fill the structure. Section titles should still
+be content-driven (e.g., "Why Authlib over google-auth-oauthlib" beats
+"Why").
+"""
+
+
+_ARCHETYPE_HINT_TENSION = """## Section structure hint — Tension archetype
+
+This page surfaces an unresolved disagreement. Tension pages typically
+have these sections:
+
+1. **The disagreement** — what is contested (1-2 sentences framing)
+2. **Position A** — first stance, citing supporting fact_ids
+3. **Position B** — second stance, citing supporting fact_ids
+4. **Common ground** — what both positions agree on (if any)
+5. **What's required to resolve** — owners, blockers, decision path
+
+Render Position A and Position B with EQUAL weight. Do NOT take a side
+in the prose. Cite each position's supporting facts; let the reader
+weigh evidence.
+"""
+
+
+_ARCHETYPE_HINT_FOLDER = """## Section structure hint — Folder archetype
+
+This page indexes a folder's child pages. Folder pages typically have:
+
+1. **What this area covers** — 1 paragraph framing the folder's scope
+2. **Recent strategic shifts** — what changed in the last 2-4 weeks across
+   descendant pages (cite descendant fact_ids)
+3. **Major decisions** — top 3-5 decisions surfaced across descendants
+4. **Cross-cutting tensions** — disagreements that span multiple sub-pages
+5. **Where we're headed** — open questions / forward direction
+
+Sections should synthesize ACROSS the descendant pages — not duplicate
+each child's narrative. Reference children by their wiki link.
+"""
+
+
+_ARCHETYPE_HINT_CHANNEL_OVERVIEW = """## Section structure hint — Channel Overview archetype
+
+This is the channel's landing page. Overview pages typically have 5-10
+sections covering:
+
+1. **What is X?** — 2-3 paragraphs introducing the project/topic the
+   channel covers (cite the foundational facts)
+2. **Architecture** — high-level structure if technical (use mermaid
+   visual)
+3. **Current priorities** — what the team is actively working on
+4. **Recent decisions** — top 5 decisions in the last 30 days
+5. **Active areas** — which folders/topics are seeing the most discussion
+6. **Open questions** — top unresolved threads
+7. **Roadmap** — known forward direction (gated on having forward-
+   looking facts)
+
+This is a LANDMARK page — word count cap is 5,000 words instead of the
+default 3,000. Spend the budget on synthesis depth, not on listing
+every fact.
+"""
+
+
+# Map archetype value (as produced by ``planner._derive_archetype``) to the
+# corresponding hint block. Keys cover the four archetypes that get hints;
+# Topic + unknown archetypes fall through to the empty string.
+_ARCHETYPE_HINT_BLOCKS: dict[str, str] = {
+    "decision": _ARCHETYPE_HINT_DECISION,
+    "tension": _ARCHETYPE_HINT_TENSION,
+    "folder": _ARCHETYPE_HINT_FOLDER,
+    "channel_overview": _ARCHETYPE_HINT_CHANNEL_OVERVIEW,
+    # Channel overview can also surface as ``"overview"`` in some
+    # call-sites; alias both to the same block defensively.
+    "overview": _ARCHETYPE_HINT_CHANNEL_OVERVIEW,
+}
+
+
+def get_archetype_hint_block(archetype: str) -> str:
+    """Return the soft section-structure hint block for ``archetype``.
+
+    Topic archetype (default) returns the empty string — sections come
+    purely from cluster content (Decision 2 in the design doc). Unknown
+    archetypes also return the empty string defensively so callers never
+    raise on a freshly-added archetype.
+
+    The returned blocks are *soft* hints: every block explicitly tells
+    the LLM to DEVIATE when the data does not fit. They never enforce
+    a rigid template.
+    """
+    if not archetype:
+        return ""
+    return _ARCHETYPE_HINT_BLOCKS.get(str(archetype).strip().lower(), "")
+
+
 def build_module_compile_prompt_v3(
     *,
     signals: dict,
