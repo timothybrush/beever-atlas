@@ -5,6 +5,7 @@ from typing import Any
 
 from google.adk.agents.callback_context import CallbackContext
 
+from beever_atlas.agents.ingestion.narration_filter import filter_facts
 from beever_atlas.agents.schemas.extraction import EntityExtractionResult, FactExtractionResult
 from beever_atlas.infra.config import get_settings
 
@@ -41,6 +42,21 @@ def fact_quality_gate_callback(callback_context: CallbackContext) -> None:
             "fact_quality_gate_callback: unexpected type for extracted_facts: %s", type(raw)
         )
         return
+
+    # Defense-in-depth: rewrite/demote activity-log narration BEFORE the
+    # quality-score threshold filter. The fact-extractor prompt already
+    # discourages who-narrative phrasing, but the LLM can still slip;
+    # this normalises ``memory_text`` so wiki Key Facts tables and MCP
+    # ``find_facts`` results render synthesized knowledge, not activity
+    # log entries. Fail-safe — exceptions fall back to the original list.
+    try:
+        facts_dicts = filter_facts(facts_dicts)
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.exception(
+            "fact_quality_gate_callback: narration filter failed err=%s; "
+            "continuing with unfiltered facts",
+            exc,
+        )
 
     before_count = len(facts_dicts)
     filtered = [f for f in facts_dicts if f.get("quality_score", 0.0) >= threshold]

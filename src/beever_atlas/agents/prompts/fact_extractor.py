@@ -48,6 +48,38 @@ A fact is a concise statement that:
 - Write like a teammate summarising a thread, NOT like a structured log insert.
 - One crisp sentence beats two vague ones.
 
+### Writing style — synthesized knowledge, NOT activity log
+
+Each fact's ``memory_text`` MUST state the underlying knowledge as a
+declarative, third-person sentence. Do NOT narrate WHO shared/posted/
+mentioned/noted what.
+
+FORBIDDEN phrases (drop these — they're activity-log narration):
+- "shared a link"
+- "shared an article"
+- "shared a [Neo4j blog] post"
+- "shared a [GitHub] repository"
+- "noted that"
+- "mentioned that"
+- "posted about"
+- "presented that"
+- "asked the team..."  (when followed by a clarification — extract the underlying question, not the act of asking)
+
+GOOD examples:
+- "The team adopted Authlib over google-auth-oauthlib for its modern OIDC discovery."
+- "Ory Hydra is an OAuth 2.0 + OpenID Connect provider that the team is evaluating as an authentication backend."
+- "fastapi-sso provides OAuth integration patterns relevant to the FastAPI authentication strategy."
+- "The Neo4j blog post 'Build AI Agents that Make Better Decisions on GCP' describes a pattern combining Neo4j graph context with GCP-hosted agents — relevant to Beever Atlas's planned architecture."
+
+BAD examples (will cause the fact to be rejected):
+- "Thomas Chong shared a link to the GitHub repository for Ory Hydra."  ← who-narrative; rewrite as "Ory Hydra is an OAuth 2.0 + OIDC provider..."
+- "Jacky Chan mentioned that fastapi-sso could be useful."  ← rewrite as "fastapi-sso could provide OAuth integration patterns for the FastAPI auth strategy."
+- "Thomas Chong shared a Neo4j blog post titled..."  ← rewrite as "The Neo4j blog post '...' describes a pattern combining..."
+
+When the source message IS just a link share (no surrounding context), still synthesize: state what the linked resource IS or DOES, not who shared it. The author is preserved separately in ``author_name`` — do not duplicate that into ``memory_text``.
+
+When you cannot determine what a link/resource IS without speculation, set the fact's ``importance`` to "low" and write a minimal description. Do NOT fabricate context.
+
 ---
 
 ### Skip criteria — return empty facts for messages that are:
