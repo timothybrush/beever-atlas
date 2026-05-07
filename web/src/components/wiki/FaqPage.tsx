@@ -33,55 +33,143 @@ interface ParsedFaq {
  * pipeline (where the body lives in ``modules[]`` instead of a
  * top-level ``content`` string) does not crash the renderer.
  */
+/** Walks the FAQ markdown line-by-line and extracts Q&A pairs grouped
+ *  by the most recent heading. Tolerant of nested heading depths and
+ *  mixed shapes (``**Q: ...** + A:`` form, ``### Question?`` form,
+ *  ``**Question?**`` bold form). The caller renders each section as
+ *  a chevron-collapsible card list — duplicate sections (same title)
+ *  are merged so a wrapper-h2 followed by inner topic headings
+ *  doesn't render the same Q&A cards twice.
+ */
 function parseFaqMarkdown(raw: string | null | undefined): ParsedFaq {
   if (!raw) {
     return { preamble: "", sections: [], trailer: "" };
   }
   // Strip leading h1 (title rendered separately)
-  let content = raw.replace(/^#\s+[^\n]+\n*/, "");
+  const content = raw.replace(/^#\s+[^\n]+\n*/, "");
 
-  // The prompt sometimes drifts to wrapping all sections inside a
-  // single ``## Frequently Asked Questions`` outer heading, then
-  // emitting topic groups as ``### `` h3s. Detect that shape and
-  // demote the inner h3s to h2 so the rest of the parser sees the
-  // expected ``## Topic`` structure. Heuristic: if the first ``## ``
-  // heading's title matches the FAQ wrapper phrase AND no other
-  // ``## `` follows, demote ``### `` → ``## ``.
-  const wrapperMatch = content.match(
-    /^##\s+(frequently\s+asked\s+questions?|faqs?)\s*$/im,
-  );
-  const additionalH2s = (content.match(/^##\s+/gm) || []).length;
-  if (wrapperMatch && additionalH2s <= 1 && /^###\s/m.test(content)) {
-    // Drop the wrapper heading entirely and demote h3s to h2.
-    content = content
-      .replace(/^##\s+(frequently\s+asked\s+questions?|faqs?)\s*\n?/im, "")
-      .replace(/^###\s/gm, "## ");
-  }
+  const lines = content.split("\n");
 
-  // Split on ## headings — first chunk is the preamble (chart + intro)
-  const chunks = content.split(/^(?=##\s)/m);
-  const preamble = chunks[0].replace(/^---\s*$/gm, "").trim();
+  // Phrases that indicate "this heading is a wrapper, not a topic" —
+  // skip it as a section title so the rendered cards don't duplicate
+  // every topic under both the wrapper AND its nested headings.
+  const WRAPPER_RE = /^(frequently\s+asked\s+questions?|faqs?|q\s*&?\s*a)$/i;
 
   const sections: FaqSection[] = [];
-  let trailer = "";
+  let preambleLines: string[] = [];
+  let trailerLines: string[] = [];
+  let trailerStarted = false;
 
-  for (let i = 1; i < chunks.length; i++) {
-    const chunk = chunks[i];
-    const newlineIdx = chunk.indexOf("\n");
-    const title = (newlineIdx >= 0 ? chunk.slice(2, newlineIdx) : chunk.slice(2)).trim();
-    const body = newlineIdx >= 0 ? chunk.slice(newlineIdx + 1) : "";
+  // Current state during the walk.
+  let currentTitle: string | null = null;
+  let currentPairs: QAPair[] = [];
+  let currentBuffer: string[] = []; // body lines for the current heading
+  let pendingQuestion: string | null = null;
+  let pendingAnswerLines: string[] = [];
 
-    // "Related pages" and similar closing sections go into the trailer
-    if (/related\s*pages?|see\s*also/i.test(title)) {
-      trailer = `## ${title}\n${body}`;
+  const flushPendingQA = () => {
+    if (pendingQuestion && pendingAnswerLines.length > 0) {
+      const answer = pendingAnswerLines
+        .join("\n")
+        .replace(/^---\s*$/gm, "")
+        .trim();
+      if (answer) {
+        currentPairs.push({ question: pendingQuestion, answer });
+      }
+    }
+    pendingQuestion = null;
+    pendingAnswerLines = [];
+  };
+
+  const flushSection = () => {
+    flushPendingQA();
+    // If the current heading wasn't recognised as having pending
+    // bold-form Q&As, try the canonical ``**Q: text** / A:`` form
+    // on the buffered body as a fallback.
+    if (currentPairs.length === 0 && currentBuffer.length > 0) {
+      const fromBuffer = parseQAPairs(currentBuffer.join("\n"));
+      if (fromBuffer.length > 0) currentPairs = fromBuffer;
+    }
+    if (currentTitle !== null && currentPairs.length > 0) {
+      // Merge with an existing same-title section (handles the
+      // wrapper-h2 → topic-h2 duplication case).
+      const existing = sections.find((s) => s.title === currentTitle);
+      if (existing) {
+        existing.pairs.push(...currentPairs);
+      } else {
+        sections.push({ title: currentTitle, pairs: currentPairs });
+      }
+    }
+    currentTitle = null;
+    currentPairs = [];
+    currentBuffer = [];
+  };
+
+  for (let idx = 0; idx < lines.length; idx += 1) {
+    const line = lines[idx];
+
+    // Heading detection — h2 or h3 starts a new section UNLESS it's
+    // the FAQ wrapper phrase (then we just skip it without resetting
+    // the section, so its body inherits the next real heading).
+    const headingMatch = line.match(/^(#{2,4})\s+(.+?)\s*$/);
+    if (headingMatch) {
+      const title = headingMatch[2].trim();
+
+      // Trailer: ``## Related pages`` / ``See also`` flips us into
+      // trailer mode. Everything after goes into the raw trailer
+      // string (renderers handle that as plain markdown).
+      if (/related\s*pages?|see\s*also/i.test(title)) {
+        flushSection();
+        trailerStarted = true;
+        trailerLines.push(line);
+        continue;
+      }
+      if (trailerStarted) {
+        trailerLines.push(line);
+        continue;
+      }
+
+      // Wrapper phrase — drop the heading itself, keep collecting
+      // children under the next real heading.
+      if (WRAPPER_RE.test(title)) {
+        flushSection();
+        continue;
+      }
+
+      // Real topic heading — start a new section.
+      flushSection();
+      currentTitle = title;
       continue;
     }
 
-    const pairs = parseQAPairs(body);
-    if (pairs.length > 0) {
-      sections.push({ title, pairs });
+    if (trailerStarted) {
+      trailerLines.push(line);
+      continue;
+    }
+
+    // Bold-form question (``**...?**``) — opens a new pending QA.
+    const boldQMatch = line.match(/^\*\*([^*]+\?)\*\*\s*$/);
+    if (boldQMatch && currentTitle !== null) {
+      flushPendingQA();
+      pendingQuestion = boldQMatch[1].trim();
+      continue;
+    }
+
+    // Body line — either part of the answer to a pending bold-Q or
+    // (when there's no pending Q) buffered for the
+    // ``**Q: text** / A:`` fallback path.
+    if (pendingQuestion !== null) {
+      pendingAnswerLines.push(line);
+    } else if (currentTitle !== null) {
+      currentBuffer.push(line);
+    } else {
+      preambleLines.push(line);
     }
   }
+  flushSection();
+
+  const preamble = preambleLines.join("\n").replace(/^---\s*$/gm, "").trim();
+  const trailer = trailerLines.join("\n").trim();
 
   return { preamble, sections, trailer };
 }
