@@ -38,6 +38,7 @@ def _safe_hostname(url: str) -> str:
     except ValueError:
         return ""
 
+
 import importlib
 import inspect
 import json

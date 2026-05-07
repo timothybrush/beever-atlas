@@ -223,11 +223,7 @@ def compute_signals(
                 media_by_kind["inline"].append(m)
             else:
                 media_by_kind["gallery"].append(m)
-        elif (
-            kind == "video"
-            or _is_video_host(url)
-            or url.endswith((".mp4", ".webm"))
-        ):
+        elif kind == "video" or _is_video_host(url) or url.endswith((".mp4", ".webm")):
             media_by_kind["video"].append(m)
         elif kind == "pdf" or url.endswith(".pdf"):
             media_by_kind["pdf"].append(m)
