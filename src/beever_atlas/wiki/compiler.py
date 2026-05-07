@@ -3998,17 +3998,61 @@ class WikiCompiler:
         else:
             open_questions_data = []
         # Related topics from the existing related_cluster_ids logic.
+        # The actual ``shared_entities`` per cluster pair is already
+        # computed by ``_compute_cross_cluster_shared_entities`` in the
+        # consolidation service and persisted as
+        # ``channel_summary.topic_graph_edges``. Look that up to surface
+        # a real reason ("shared: jwt, oauth +2") instead of the
+        # boilerplate "shared entities or contributors" that every
+        # related entry used to repeat verbatim.
         all_clusters = gathered.get("clusters", [])
+        _channel_summary = gathered.get("channel_summary")
+        _edges_raw = getattr(_channel_summary, "topic_graph_edges", None) or []
+        # Edges are stored undirected; key on the sorted (a, b) pair so
+        # lookup works regardless of which side is the current cluster.
+        edges_by_pair: dict[tuple[str, str], list[str]] = {}
+        for edge in _edges_raw:
+            if not isinstance(edge, dict):
+                continue
+            a_id = str(edge.get("source_cluster_id") or "")
+            b_id = str(edge.get("target_cluster_id") or "")
+            if not a_id or not b_id:
+                continue
+            shared = edge.get("shared_entities") or []
+            if isinstance(shared, list):
+                # ``sorted`` returns a list; cast to a fixed-arity
+                # tuple so pyright infers the dict-key type correctly
+                # and the lookup below stays type-stable.
+                lo, hi = sorted([a_id, b_id])
+                edges_by_pair[(lo, hi)] = [str(s) for s in shared if isinstance(s, str)]
+
+        def _format_related_reason(shared_names: list[str]) -> str:
+            cleaned = [n.strip() for n in shared_names if n and n.strip()]
+            if not cleaned:
+                return "shared entities or contributors"
+            if len(cleaned) == 1:
+                return f"shared: {cleaned[0]}"
+            if len(cleaned) <= 3:
+                return f"shared: {', '.join(cleaned)}"
+            top = ", ".join(cleaned[:3])
+            return f"shared: {top} +{len(cleaned) - 3} more"
+
         related_topics_data = []
         for rid in getattr(cluster, "related_cluster_ids", []):
             for rc in all_clusters:
                 if rc.id == rid:
+                    plo, phi = sorted([str(cluster.id), str(rc.id)])
+                    shared = edges_by_pair.get((plo, phi), [])
                     related_topics_data.append(
                         {
                             "title": rc.title,
                             "slug": _slugify(rc.title) or rc.id,
-                            "reason": "shared entities or contributors",
-                            "score": 0.5,
+                            "reason": _format_related_reason(shared),
+                            "shared_entities": shared,
+                            # Tier the score by how many entities overlap
+                            # — gives the prompt a real signal to rank
+                            # related links rather than a flat 0.5.
+                            "score": min(0.4 + 0.1 * len(shared), 1.0) if shared else 0.5,
                         }
                     )
                     break
