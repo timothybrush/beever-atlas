@@ -860,24 +860,35 @@ async def get_wiki_page_by_slug(
     if page is None:
         raise HTTPException(status_code=404, detail=f"No wiki page slug={slug!r}")
     if page.merged_into:
-        # Validate the merge target slug before embedding into the
-        # redirect URL — closes
-        # ``codeql:py/url-redirection-from-remote`` by ensuring we
-        # only redirect to slugs that look like our internal slug
-        # shape (alphanumeric + hyphen + underscore + colon, no path
-        # traversal characters). The merge_into field is set by an
-        # authenticated merge endpoint that already validates the
-        # source slug, so this is defence-in-depth.
+        # Validate BOTH path components before embedding into the 301
+        # redirect URL — closes ``codeql:py/url-redirection-from-remote``
+        # which otherwise treats both ``channel_id`` (from the URL path)
+        # and ``page.merged_into`` (from the page store) as untrusted
+        # sources that flow into the ``Location`` header. ``channel_id``
+        # is also pre-validated by ``assert_channel_access`` above, but
+        # CodeQL's taint propagator doesn't recognise that helper as a
+        # sanitiser; the explicit ``re.fullmatch`` here is the
+        # syntactic anchor.
         import re
 
-        if not re.fullmatch(r"[A-Za-z0-9_:-]{1,128}", page.merged_into):
+        _SLUG_RE = re.compile(r"\A[A-Za-z0-9_:-]{1,128}\Z")
+        if not _SLUG_RE.match(channel_id):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid channel_id — refusing to redirect",
+            )
+        if not _SLUG_RE.match(page.merged_into):
             raise HTTPException(
                 status_code=500,
                 detail="Invalid merge target slug — refusing to redirect",
             )
-        target = quote(page.merged_into, safe="")
+        # quote() applies one more layer of belt-and-suspenders for
+        # any future relaxation of the regex. The path is now built
+        # entirely from validated, percent-encoded components.
+        safe_channel = quote(channel_id, safe="")
+        safe_target = quote(page.merged_into, safe="")
         return RedirectResponse(  # type: ignore[return-value]
-            url=f"/api/channels/{channel_id}/wiki/pages-by-slug/{target}",
+            url=f"/api/channels/{safe_channel}/wiki/pages-by-slug/{safe_target}",
             status_code=301,
         )
     return page.model_dump(mode="json")
