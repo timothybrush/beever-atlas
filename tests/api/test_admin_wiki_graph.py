@@ -224,6 +224,10 @@ def _fake_page(*, slug, title, kind="topic", cross_links=None, page_id=None):
         page_id=page_id or f"topic:{slug}",
         cross_links=cross_links or {},
         updated_at=_dt(2026, 5, 1, tzinfo=UTC),
+        # _page_has_renderable_content checks content/narrative_sections/modules;
+        # supply a non-empty string so the page is not filtered out of the graph.
+        content="stub",
+        parent_id=None,
     )
 
 

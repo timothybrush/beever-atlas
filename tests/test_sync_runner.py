@@ -143,6 +143,9 @@ async def test_run_sync_marks_completed_with_errors_when_batches_fail(
     calls: dict[str, object] = {}
 
     class _Mongo:
+        async def upsert_channel_messages(self, rows) -> dict[str, int]:
+            return {"inserted": len(rows), "modified": 0, "matched": 0, "upserted_ids": len(rows)}
+
         async def complete_sync_job(
             self,
             job_id: str,
@@ -615,6 +618,9 @@ async def test_run_sync_advances_cursor_even_when_batches_fail(
     calls: dict[str, object] = {}
 
     class _Mongo:
+        async def upsert_channel_messages(self, rows) -> dict[str, int]:
+            return {"inserted": len(rows), "modified": 0, "matched": 0, "upserted_ids": len(rows)}
+
         async def complete_sync_job(self, **kwargs) -> None:
             calls["complete"] = kwargs
 
