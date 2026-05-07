@@ -568,6 +568,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "Glossary",
         "activity": "Recent Activity",
         "resources": "Resources & Media",
+        "recent_updates": "Recent Updates",
+        "project_status": "Project Status & Progress",
+        "core_discussions": "Core Discussions",
     },
     "zh-HK": {
         "overview": "概覽",
@@ -577,6 +580,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "詞彙表",
         "activity": "近期活動",
         "resources": "資源與媒體",
+        "recent_updates": "最新動態",
+        "project_status": "項目狀態與進度",
+        "core_discussions": "核心討論",
     },
     "zh-TW": {
         "overview": "概覽",
@@ -586,6 +592,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "詞彙表",
         "activity": "近期活動",
         "resources": "資源與媒體",
+        "recent_updates": "最新動態",
+        "project_status": "專案狀態與進度",
+        "core_discussions": "核心討論",
     },
     "zh-CN": {
         "overview": "概览",
@@ -595,6 +604,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "词汇表",
         "activity": "近期活动",
         "resources": "资源与媒体",
+        "recent_updates": "最新动态",
+        "project_status": "项目状态与进度",
+        "core_discussions": "核心讨论",
     },
     "ja": {
         "overview": "概要",
@@ -604,6 +616,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "用語集",
         "activity": "最近のアクティビティ",
         "resources": "リソースとメディア",
+        "recent_updates": "最近の更新",
+        "project_status": "プロジェクト状況と進捗",
+        "core_discussions": "主要な議論",
     },
     "ko": {
         "overview": "개요",
@@ -613,6 +628,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "용어집",
         "activity": "최근 활동",
         "resources": "리소스 및 미디어",
+        "recent_updates": "최근 업데이트",
+        "project_status": "프로젝트 상태 및 진행 상황",
+        "core_discussions": "핵심 논의",
     },
     "es": {
         "overview": "Resumen",
@@ -622,6 +640,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "Glosario",
         "activity": "Actividad reciente",
         "resources": "Recursos y medios",
+        "recent_updates": "Actualizaciones recientes",
+        "project_status": "Estado y progreso del proyecto",
+        "core_discussions": "Discusiones clave",
     },
     "fr": {
         "overview": "Vue d'ensemble",
@@ -631,6 +652,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "Glossaire",
         "activity": "Activité récente",
         "resources": "Ressources et médias",
+        "recent_updates": "Mises à jour récentes",
+        "project_status": "État et progression du projet",
+        "core_discussions": "Discussions principales",
     },
     "de": {
         "overview": "Übersicht",
@@ -640,6 +664,9 @@ WIKI_PAGE_TITLES: dict[str, dict[str, str]] = {
         "glossary": "Glossar",
         "activity": "Letzte Aktivität",
         "resources": "Ressourcen & Medien",
+        "recent_updates": "Neueste Aktualisierungen",
+        "project_status": "Projektstatus & Fortschritt",
+        "core_discussions": "Kerndiskussionen",
     },
 }
 
@@ -1239,6 +1266,160 @@ def _render_overview_momentum(momentum_text: str, recent: dict) -> str:
     return "\n".join(lines).rstrip()
 
 
+_FOLDER_COMPILE_PARALLELISM: int = 4
+"""Max simultaneous in-flight folder-page LLM compiles per
+``ready_now`` topology batch in ``compile_folders``.
+
+The folder pipeline has historically been serial — a 4-folder
+channel paid 4× the LLM round-trip latency end-to-end, even though
+sibling folders within one batch have no inter-dependency.
+Parallelising at the gather() level cuts the wall-clock from
+``N × 16s`` to roughly ``ceil(N/4) × 16s``.
+
+Cap is 4 (not unbounded) so a pathological wiki shape (e.g. 50
+sibling folders) doesn't hammer the LLM provider past its quota
+and trip the CircuitBreaker mid-regenerate. Tune in code if Gemini
+quota grows; not exposed as an env var because operators have no
+reason to lower this (lower = strictly slower)."""
+
+
+def _rollup_folder_child_phantom_facts(modules: list[Any]) -> list[dict[str, Any]]:
+    """Synthesize phantom facts from a sub-folder's persisted module data.
+
+    Walks a sub-folder's ``folder_stats`` (already-aggregated counts)
+    and ``top_contributors`` (author roster) modules to produce a fact
+    list that re-aggregates to the same numbers when fed into a parent
+    folder's ``build_folder_stats_data`` / ``build_top_contributors_data``.
+
+    Background: ``compile_folders`` topologically sorts so child
+    folders compile first; their parents receive already-compiled
+    ``WikiPage`` objects via ``children_pages``. A folder page has
+    no direct citations and its ``modules`` list contains
+    ``folder_stats``/``top_contributors``/``subpage_cards`` rather
+    than ``decision_log``/``quote_highlights``. So the leaf-style
+    F2 promotion (which looks for ``decision_log`` etc.) finds
+    nothing → the parent's ``descendants_payload[i].facts`` stays
+    empty → the parent's ``folder_stats`` aggregates 0/0/0/0
+    despite the sub-folder containing hundreds of memories.
+
+    Phantom facts use empty ``memory_text`` so they DO NOT pollute
+    quote_highlights or other content-rendering modules — they only
+    move the numeric counts. Each contributor's name is assigned to
+    at least one phantom fact so the distinct-contributor count
+    rolls up correctly.
+
+    Returns an empty list when the sub-folder has no folder_stats
+    AND no top_contributors entries — the caller can safely append
+    the (empty) list and proceed.
+    """
+    total_memories = 0
+    total_decisions = 0
+    total_questions = 0
+    contributor_names: list[str] = []
+    for mod in modules or []:
+        if not isinstance(mod, dict):
+            continue
+        mod_id = mod.get("id")
+        inner = mod.get("data") or {}
+        if not isinstance(inner, dict):
+            continue
+        if mod_id == "folder_stats":
+            for stat in inner.get("stats") or []:
+                if not isinstance(stat, dict):
+                    continue
+                label = str(stat.get("label") or "").strip().lower()
+                try:
+                    val = int(stat.get("value") or 0)
+                except (TypeError, ValueError):
+                    val = 0
+                if label == "memories":
+                    total_memories = val
+                elif label == "decisions":
+                    total_decisions = val
+                elif label in ("open questions", "questions"):
+                    total_questions = val
+        elif mod_id == "top_contributors":
+            for item in inner.get("items") or []:
+                if isinstance(item, dict):
+                    name = str(item.get("name") or item.get("author") or "").strip()
+                    if name:
+                        contributor_names.append(name)
+
+    if (
+        total_memories == 0
+        and total_decisions == 0
+        and total_questions == 0
+        and not contributor_names
+    ):
+        return []
+
+    phantom: list[dict[str, Any]] = []
+
+    def _author_for(idx: int) -> str:
+        if not contributor_names:
+            return ""
+        return contributor_names[idx % len(contributor_names)]
+
+    # Decision-typed phantoms come first so author rotation puts
+    # contributors on decisions (more likely to surface in
+    # cross_cutting_decisions builders).
+    for i in range(total_decisions):
+        phantom.append(
+            {
+                "fact_id": "",
+                "memory_text": "",
+                "author_name": _author_for(i),
+                "fact_type": "decision",
+                "importance": "high",
+                "message_ts": "",
+            }
+        )
+    for i in range(total_questions):
+        phantom.append(
+            {
+                "fact_id": "",
+                "memory_text": "",
+                "author_name": _author_for(total_decisions + i),
+                "fact_type": "question",
+                "importance": "medium",
+                "message_ts": "",
+            }
+        )
+    # Untyped memories fill the remainder so total = total_memories.
+    # ``folder_stats.build_folder_stats_data`` counts ALL facts as
+    # memories, then adds typed ones to the matching bucket — so
+    # decisions+questions are already counted in total_memories.
+    remaining = max(total_memories - total_decisions - total_questions, 0)
+    for i in range(remaining):
+        phantom.append(
+            {
+                "fact_id": "",
+                "memory_text": "",
+                "author_name": _author_for(total_decisions + total_questions + i),
+                "fact_type": "",
+                "message_ts": "",
+            }
+        )
+    # Ensure every contributor name appears at least once even when
+    # the phantom-fact count is smaller than the contributor roster
+    # (e.g. a sparse folder with 5 contributors but only 3 memories).
+    if contributor_names:
+        seen_authors = {f["author_name"] for f in phantom}
+        for name in contributor_names:
+            if name not in seen_authors:
+                phantom.append(
+                    {
+                        "fact_id": "",
+                        "memory_text": "",
+                        "author_name": name,
+                        "fact_type": "",
+                        "message_ts": "",
+                    }
+                )
+                seen_authors.add(name)
+    return phantom
+
+
 def _splice_overview_sections(
     content: str,
     channel_summary: Any,
@@ -1304,6 +1485,265 @@ def _splice_overview_sections(
         [k for k, v in present.items() if not v],
     )
     return content.rstrip() + "\n\n" + "\n\n".join(additions) + "\n"
+
+
+def _t10n(lang: str, key: str) -> str:
+    """Look up a localized title from ``WIKI_PAGE_TITLES`` with English
+    fallback. Used by the per-section splicers below so headings render
+    in the target language regardless of LLM behaviour."""
+    lang_map = WIKI_PAGE_TITLES.get(lang) or WIKI_PAGE_TITLES["en"]
+    return lang_map.get(key) or WIKI_PAGE_TITLES["en"].get(key) or key.replace("_", " ").title()
+
+
+def _lang_has_translations(lang: str) -> bool:
+    """Return True when ``lang`` has its own entry in ``WIKI_PAGE_TITLES``.
+
+    The deterministic splicers below skip when the locale is missing
+    rather than splicing an English-named heading into a body the
+    LLM already translated to the target language. ``WIKI_PAGE_TITLES``
+    currently ships ~9 locales while ``supported_languages`` ships
+    ~30; for the unsupported ones we trust the LLM-side prose to
+    surface the same content rather than risk mixed-language output.
+    """
+    return lang in WIKI_PAGE_TITLES
+
+
+def _has_localized_h2(body: str, title: str) -> bool:
+    """Return True when ``body`` already contains an H2 heading whose
+    text matches ``title`` (case-insensitive, ignoring decoration).
+
+    Idempotency guard for the per-section splicers. The LLM is free
+    to emit decorated headings — ``## **Recent Updates**`` (bold),
+    ``## 1. Recent Updates`` (numbered), ``## Recent Updates 🚀``
+    (emoji), ``## Recent Updates {#anchor}`` (anchor). The strict
+    ``^## TITLE$`` form misses all of those and would cause the
+    splicer to insert a duplicate section. Loosen detection to
+    "title appears as a word inside any H2", ignoring leading
+    numbering / bold / italic markers and trailing emoji / anchor.
+    """
+    if not body or not title:
+        return False
+    pattern = re.compile(
+        # ^##\s+ — H2 marker
+        # (\*+|_+|\d+\.\s|\s)* — optional leading bold/italic/numbering
+        # <escaped title as a word boundary> — case-insensitive title
+        r"^##\s+(?:\*+|_+|\d+\.\s+|\s)*\b" + re.escape(title.strip()) + r"\b",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    return bool(pattern.search(body))
+
+
+def _splice_recent_updates(
+    body: str,
+    *,
+    recent_activity_summary: dict,
+    lang: str,
+) -> str:
+    """Append a deterministic ``Recent Updates`` H2 to ``body``.
+
+    Pulls from ``recent_activity_summary`` (the dict
+    ``ChannelSummary.recent_activity_summary`` carries — keys
+    ``facts_added_7d``, ``decisions_added_7d``, ``new_topics``,
+    ``updated_topics``, ``highlights``). Caps at ~5 bullets so the
+    section stays glanceable. Returns ``body`` unchanged when the
+    input is empty OR a section with the localized heading already
+    exists (case-insensitive match)."""
+    if not isinstance(recent_activity_summary, dict) or not recent_activity_summary:
+        return body
+    # Skip when the locale lacks a translation entry — splicing an
+    # English heading into a translated body produces visibly mixed
+    # output. See ``_lang_has_translations`` for rationale.
+    if not _lang_has_translations(lang):
+        return body
+    title = _t10n(lang, "recent_updates")
+    if _has_localized_h2(body, title):
+        return body
+
+    facts_added = int(recent_activity_summary.get("facts_added_7d") or 0)
+    decisions_added = int(recent_activity_summary.get("decisions_added_7d") or 0)
+    new_topics = recent_activity_summary.get("new_topics") or []
+    updated_topics = recent_activity_summary.get("updated_topics") or []
+    highlights = recent_activity_summary.get("highlights") or []
+
+    bullets: list[str] = []
+    if facts_added or decisions_added:
+        bullets.append(
+            f"- {facts_added} new memories added in the last 7 days"
+            + (f" ({decisions_added} decisions)" if decisions_added else "")
+        )
+    if new_topics:
+        names = [str(t).strip() for t in new_topics if str(t).strip()]
+        if names:
+            bullets.append(f"- New topics: {', '.join(names[:5])}")
+    if updated_topics:
+        names = [str(t).strip() for t in updated_topics if str(t).strip()]
+        if names:
+            bullets.append(f"- Updated topics: {', '.join(names[:5])}")
+    for h in highlights:
+        if len(bullets) >= 5:
+            break
+        if isinstance(h, str) and h.strip():
+            bullets.append(f"- {h.strip()}")
+        elif isinstance(h, dict):
+            text = (h.get("memory_text") or h.get("text") or h.get("title") or "").strip()
+            if text:
+                author = (h.get("author_name") or h.get("author") or "").strip()
+                snippet = text[:160]
+                if author:
+                    bullets.append(f"- **{author}** — {snippet}")
+                else:
+                    bullets.append(f"- {snippet}")
+
+    if not bullets:
+        return body
+    bullets = bullets[:5]
+    section = f"## {title}\n\n" + "\n".join(bullets)
+    return body.rstrip() + "\n\n" + section + "\n"
+
+
+def _splice_project_status(
+    body: str,
+    *,
+    momentum: str | dict | None,
+    team_dynamics: str | dict | None,
+    lang: str,
+) -> str:
+    """Append a deterministic ``Project Status & Progress`` H2 to ``body``.
+
+    ``momentum`` is the channel-level momentum prose. The domain model
+    types it as ``str`` (``models/domain.py``); ``dict`` and ``None``
+    are accepted as forward-compat shapes (an upstream enrichment can
+    surface a structured momentum object without breaking this call
+    site). Same applies to ``team_dynamics``. When both normalise to
+    empty / blank, the section is skipped. Idempotent against an
+    existing localized H2 with the same title."""
+    # Skip when the locale lacks a translation entry — see
+    # ``_lang_has_translations`` for rationale.
+    if not _lang_has_translations(lang):
+        return body
+    title = _t10n(lang, "project_status")
+    if _has_localized_h2(body, title):
+        return body
+
+    # Both inputs are typed ``str`` on the domain model but the
+    # function takes ``dict`` per the spec; tolerate both so callers
+    # that already have prose can pass it directly.
+    def _normalize(v: Any) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, str):
+            return v.strip()
+        if isinstance(v, dict):
+            for k in ("text", "summary", "description"):
+                t = v.get(k)
+                if isinstance(t, str) and t.strip():
+                    return t.strip()
+        return str(v).strip()
+
+    momentum_text = _normalize(momentum)
+    team_text = _normalize(team_dynamics)
+
+    # De-dupe with the legacy ``_splice_overview_sections`` which
+    # emits ``## Recent momentum`` from the same ``momentum`` field.
+    # If that section is already in the body, drop our momentum bullet
+    # so the user doesn't see the same prose twice. ``team_dynamics``
+    # has no overlap and stays.
+    if momentum_text and _has_localized_h2(body, "Recent momentum"):
+        momentum_text = ""
+
+    if not momentum_text and not team_text:
+        return body
+
+    bullets: list[str] = []
+    if momentum_text:
+        bullets.append(f"- **Momentum** — {momentum_text}")
+    if team_text:
+        bullets.append(f"- **Team dynamics** — {team_text}")
+
+    section = f"## {title}\n\n" + "\n".join(bullets)
+    return body.rstrip() + "\n\n" + section + "\n"
+
+
+def _splice_core_discussions(
+    body: str,
+    *,
+    top_decisions: list,
+    cited_facts: list,
+    lang: str,
+) -> str:
+    """Append a deterministic ``Core Discussions`` H2 to ``body``.
+
+    Renders up to 3 top decisions (using the same shape the
+    ``top_decisions`` enrichment carries — ``name`` / ``decided_by``
+    / ``date``) plus up to 3 high-importance fact quotes (drawn from
+    the ``cited_facts_for_prompt`` list which already carries an
+    ``index`` field — that maps 1:1 to the inline ``[N]`` citation
+    markers the rest of the page uses). Skipped when both inputs
+    are empty. Idempotent against an existing localized H2."""
+    # Skip when the locale lacks a translation entry — see
+    # ``_lang_has_translations`` for rationale.
+    if not _lang_has_translations(lang):
+        return body
+    title = _t10n(lang, "core_discussions")
+    if _has_localized_h2(body, title):
+        return body
+
+    decisions = [d for d in (top_decisions or []) if isinstance(d, dict)][:3]
+    quotes_in: list[dict] = []
+    for f in cited_facts or []:
+        if not isinstance(f, dict):
+            continue
+        if (f.get("excerpt") or f.get("memory_text") or "").strip():
+            quotes_in.append(f)
+    quotes_in = quotes_in[:3]
+
+    if not decisions and not quotes_in:
+        return body
+
+    lines: list[str] = [f"## {title}", ""]
+    if decisions:
+        lines.append("### Top decisions")
+        lines.append("")
+        for d in decisions:
+            name = (d.get("name") or d.get("title") or "").strip()
+            if not name:
+                continue
+            decided_by = (d.get("decided_by") or "").strip()
+            date = (d.get("date") or "").strip()[:10]
+            bits: list[str] = []
+            if decided_by:
+                bits.append(decided_by)
+            if date:
+                bits.append(date)
+            suffix = f" — {' · '.join(bits)}" if bits else ""
+            lines.append(f"- **{name}**{suffix}")
+        lines.append("")
+    if quotes_in:
+        from beever_atlas.wiki.render import _strip_untrusted_wrapper
+
+        lines.append("### Key voices")
+        lines.append("")
+        for q in quotes_in:
+            # ``cited_facts_for_prompt`` wraps every excerpt with the
+            # ``<untrusted>...</untrusted>`` prompt-safety marker for
+            # the LLM context — those tags must be stripped before the
+            # text reaches the rendered markdown the user sees.
+            raw_text = q.get("excerpt") or q.get("memory_text") or ""
+            text = _strip_untrusted_wrapper(str(raw_text)).strip()
+            if not text:
+                continue
+            author = (q.get("author") or q.get("author_name") or "").strip()
+            idx = q.get("index")
+            cite = f" [{int(idx)}]" if isinstance(idx, int) else ""
+            attribution = f" — {author}" if author else ""
+            lines.append(f'> "{text}"{attribution}{cite}')
+            lines.append("")
+        # Trim trailing blank line for clean joining.
+        while lines and not lines[-1]:
+            lines.pop()
+
+    section = "\n".join(lines).rstrip()
+    return body.rstrip() + "\n\n" + section + "\n"
 
 
 def _overview_fallback(channel_summary: Any, clusters: list) -> tuple[str, str]:
@@ -3232,6 +3672,29 @@ class WikiCompiler:
             decisions_count=len(gathered_decisions),
             skipped_topics=skipped_topics,
         )
+        # Section order matters: all three splicers append to the
+        # body's tail, so the FIRST call lands closest to the top of
+        # the appendix block. Order picked for reader-value priority:
+        #   1. Core Discussions  — top decisions + key voices
+        #   2. Project Status    — momentum + team dynamics
+        #   3. Recent Updates    — week-over-week activity counts
+        post_content = _splice_core_discussions(
+            post_content,
+            top_decisions=getattr(summary, "top_decisions", []) or [],
+            cited_facts=cited_facts_for_prompt,
+            lang=self._target_lang,
+        )
+        post_content = _splice_project_status(
+            post_content,
+            momentum=getattr(summary, "momentum", "") or "",
+            team_dynamics=getattr(summary, "team_dynamics", "") or "",
+            lang=self._target_lang,
+        )
+        post_content = _splice_recent_updates(
+            post_content,
+            recent_activity_summary=getattr(summary, "recent_activity_summary", {}) or {},
+            lang=self._target_lang,
+        )
         return WikiPage(
             id="overview",
             slug="overview",
@@ -4742,6 +5205,14 @@ class WikiCompiler:
         descendants_payload: list[dict[str, Any]] = []
         for c in children_pages:
             d_facts: list[dict[str, Any]] = []
+            # Nested-folder rollup: a folder child carries no leaf
+            # citations / topic-style modules but DOES persist its own
+            # ``folder_stats`` + ``top_contributors`` from a prior
+            # compile pass. Roll those up via phantom facts so the
+            # parent's stat strip and contributor count stop showing
+            # 0/0/0/0 on multi-level folder hierarchies.
+            if (getattr(c, "page_type", "") or "") == "folder":
+                d_facts.extend(_rollup_folder_child_phantom_facts(c.modules or []))
             for cit in c.citations or []:
                 d_facts.append(
                     {
@@ -4759,16 +5230,21 @@ class WikiCompiler:
                         "permalink": cit.permalink or "",
                     }
                 )
-            # Promote decision facts from each child's persisted
-            # ``modules`` (if the child was compiled via the modular
-            # topic path, decision_log entries live there).
+            # Promote structured module entries from each child's
+            # persisted ``modules`` (if the child was compiled via the
+            # modular topic path, decision/quote/tension/open-question
+            # entries live there). Each promotion fires the matching
+            # folder predicate (decision → cross_cutting_decisions,
+            # quote → quote_highlights, tension → folder_stats tension
+            # bucket, open_question → folder_stats question bucket).
             for mod in c.modules or []:
                 if not isinstance(mod, dict):
                     continue
-                if mod.get("id") != "decision_log":
-                    continue
+                mod_id = mod.get("id")
                 inner = mod.get("data") or {}
-                if isinstance(inner, dict):
+                if not isinstance(inner, dict):
+                    continue
+                if mod_id == "decision_log":
                     for dec in inner.get("decisions") or []:
                         if not isinstance(dec, dict):
                             continue
@@ -4780,6 +5256,61 @@ class WikiCompiler:
                                 "fact_type": "decision",
                                 "importance": dec.get("importance") or "high",
                                 "message_ts": str(dec.get("date") or ""),
+                            }
+                        )
+                elif mod_id == "quote_highlights":
+                    for q in inner.get("quotes") or []:
+                        if not isinstance(q, dict):
+                            continue
+                        text = str(q.get("text") or q.get("memory_text") or "").strip()
+                        if not text:
+                            continue
+                        d_facts.append(
+                            {
+                                "fact_id": str(q.get("fact_id") or ""),
+                                "memory_text": text,
+                                "author_name": str(q.get("author") or q.get("made_by") or ""),
+                                "fact_type": "quote",
+                                "importance": q.get("importance") or "high",
+                                "message_ts": str(q.get("date") or q.get("message_ts") or ""),
+                            }
+                        )
+                elif mod_id == "tension_callout":
+                    title = str(inner.get("title") or "").strip()
+                    if title:
+                        positions = inner.get("positions") or []
+                        author = ""
+                        fact_id = ""
+                        if isinstance(positions, list) and positions:
+                            first = positions[0]
+                            if isinstance(first, dict):
+                                author = str(first.get("author") or "")
+                                fact_id = str(first.get("fact_id") or "")
+                        d_facts.append(
+                            {
+                                "fact_id": fact_id,
+                                "memory_text": title,
+                                "author_name": author,
+                                "fact_type": "tension",
+                                "importance": "high",
+                                "message_ts": str(inner.get("since") or ""),
+                            }
+                        )
+                elif mod_id == "open_questions":
+                    for q in inner.get("questions") or []:
+                        if not isinstance(q, dict):
+                            continue
+                        text = str(q.get("question") or q.get("text") or "").strip()
+                        if not text:
+                            continue
+                        d_facts.append(
+                            {
+                                "fact_id": str(q.get("fact_id") or ""),
+                                "memory_text": text,
+                                "author_name": str(q.get("raised_by") or q.get("author") or ""),
+                                "fact_type": "open_question",
+                                "importance": q.get("importance") or "medium",
+                                "message_ts": str(q.get("raised") or q.get("date") or ""),
                             }
                         )
             descendants_payload.append(
@@ -5065,6 +5596,14 @@ class WikiCompiler:
                 for f_slug, folder in remaining.items():
                     ready_now.append((f_slug, folder))
 
+            # Build the parallel task list. Children resolution is a
+            # read-only walk over already-populated dicts, so it stays
+            # serial; only the LLM-bound ``_compile_folder_page`` work
+            # is gathered. Siblings within a single ``ready_now`` batch
+            # have no inter-dependency (their children are all already
+            # compiled by the topology check above), so they're safe
+            # to run in parallel.
+            tasks: list[tuple[str, str, list[WikiPage]]] = []
             for f_slug, folder in ready_now:
                 f_title = getattr(folder, "title", None) or f_slug.replace("-", " ").title()
                 child_slugs = list(getattr(folder, "child_slugs", None) or [])
@@ -5083,11 +5622,40 @@ class WikiCompiler:
                     # Nothing resolvable — drop the folder entirely.
                     remaining.pop(f_slug, None)
                     continue
-                folder_page = await self._compile_folder_page(
-                    folder_slug=f_slug,
-                    folder_title=f_title,
-                    children_pages=children_pages,
-                )
+                tasks.append((f_slug, f_title, children_pages))
+
+            if not tasks:
+                continue
+
+            # Cap parallelism so a wide channel (many sibling folders)
+            # doesn't spike LLM concurrency past the provider's quota
+            # — the existing CircuitBreaker would catch a 503 storm but
+            # we'd rather not trip it on regenerate. 4 in-flight is a
+            # conservative middle ground: roughly 4× speedup vs the
+            # prior serial loop while leaving headroom for the topic-
+            # page compile pass running on the same provider.
+            sem = asyncio.Semaphore(_FOLDER_COMPILE_PARALLELISM)
+
+            async def _compile_one(
+                f_slug: str,
+                f_title: str,
+                children: list[WikiPage],
+            ) -> tuple[str, WikiPage]:
+                async with sem:
+                    page = await self._compile_folder_page(
+                        folder_slug=f_slug,
+                        folder_title=f_title,
+                        children_pages=children,
+                    )
+                    return f_slug, page
+
+            results = await asyncio.gather(
+                *(_compile_one(s, t, cp) for s, t, cp in tasks),
+            )
+            # Single-threaded write-back so dict mutations don't race
+            # with each other or with any concurrent reader of
+            # ``folder_pages_by_slug`` from a future ``ready_now`` batch.
+            for f_slug, folder_page in results:
                 out[folder_page.id] = folder_page
                 folder_pages_by_slug[f_slug] = folder_page
                 remaining.pop(f_slug, None)

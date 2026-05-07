@@ -1206,22 +1206,87 @@ def _fallback_folder_output(
     descendants: list[dict],
     signals: dict[str, Any],
 ) -> ModularPageOutput:
-    """Catastrophic fallback for folder pages.
+    """Deterministic fallback for folder pages — LLM-free dashboard.
 
     When the LLM crashes / parse fails / plan validates to empty, we
-    emit a minimal but useful dashboard: hero_summary (with a
-    boilerplate TL;DR) + subpage_cards + folder_stats. This keeps the
-    page renderable; the maintainer's next regen can try the LLM path
-    again.
+    derive a useful dashboard directly from the descendant aggregate
+    instead of emitting a single one-liner. The previous fallback
+    shipped only a hero TL;DR + (sometimes) folder_stats, which left
+    the rendered page nearly empty whenever the LLM path failed.
+
+    Module sequence (when data is available):
+      hero_summary → subpage_cards → folder_stats → top_contributors
+      → cross_cutting_decisions → quote_highlights
+
+    Each module is skipped when its data builder yields no items so
+    we never ship an empty header. When ``descendants`` is empty we
+    fall back to the prior one-liner title-only behaviour so callers
+    don't crash on degenerate input. ``fell_back=True`` is preserved
+    on the output so telemetry continues to count this as a fallback.
     """
+    from beever_atlas.wiki.modules.cross_cutting_decisions import (
+        build_cross_cutting_decisions_data,
+    )
     from beever_atlas.wiki.modules.folder_stats import build_folder_stats_data
     from beever_atlas.wiki.modules.hero_summary import build_hero_summary_data
+    from beever_atlas.wiki.modules.subpage_cards import render as render_subpages
+    from beever_atlas.wiki.modules.top_contributors import (
+        build_top_contributors_data,
+    )
 
     fallback_tldr = f"**{folder_title} — folder containing {len(descendants)} pages.**"
     fallback_summary = (
         f"Wayfinding index for the {len(descendants)} descendant pages under {folder_title}."
     )
-    modules: list[dict[str, Any]] = [
+
+    # Empty-descendants safe path — emit the prior one-liner so the
+    # page renders without crashing on degenerate input.
+    if not descendants:
+        modules: list[dict[str, Any]] = [
+            {
+                "id": "hero_summary",
+                "anchor": "summary",
+                "data": build_hero_summary_data(
+                    tldr=fallback_tldr,
+                    overview=fallback_summary,
+                    signals=signals,
+                    facts=[],
+                ),
+            },
+        ]
+        return ModularPageOutput(
+            content=f"{fallback_tldr}\n\n{fallback_summary}",
+            summary=fallback_summary,
+            modules=modules,
+            planner_module_count=len(modules),
+            rendered_module_count=len(modules),
+            fell_back=True,
+        )
+
+    # Aggregate descendant facts so the hero's highlight chips reflect
+    # the union (matches the LLM-success path's hero data).
+    aggregated_facts: list[dict] = []
+    for d in descendants:
+        if not isinstance(d, dict):
+            continue
+        d_facts = d.get("facts") or []
+        if isinstance(d_facts, list):
+            aggregated_facts.extend(f for f in d_facts if isinstance(f, dict))
+
+    # Build subpage_cards markdown from the descendants directly so
+    # the markdown render path shows pages even without a separate
+    # ``children`` payload (parity with the success path's cards).
+    children_payload = [
+        {
+            "title": str(d.get("title") or ""),
+            "slug": str(d.get("slug") or ""),
+            "summary": str(d.get("summary") or "")[:160],
+        }
+        for d in descendants
+        if isinstance(d, dict)
+    ]
+
+    modules = [
         {
             "id": "hero_summary",
             "anchor": "summary",
@@ -1229,7 +1294,7 @@ def _fallback_folder_output(
                 tldr=fallback_tldr,
                 overview=fallback_summary,
                 signals=signals,
-                facts=[],
+                facts=aggregated_facts,
             ),
         },
         {
@@ -1238,11 +1303,19 @@ def _fallback_folder_output(
             "data": {
                 "label": "Pages in this section",
                 "renderer_kind": "python",
-                "markdown": "",
+                # Persist BOTH the raw children list and the prerendered
+                # markdown blob. ``subpage_cards.render`` reads
+                # ``data.children`` to render — without it any
+                # downstream consumer that re-runs the renderer (e.g.
+                # the markdown serialiser at modules_markdown.py)
+                # would emit an empty block.
+                "children": children_payload,
+                "markdown": render_subpages({"children": children_payload}),
             },
         },
     ]
-    if int(signals.get("child_count") or 0) >= 2:
+
+    if int(signals.get("child_count") or 0) >= 2 or len(descendants) >= 2:
         modules.append(
             {
                 "id": "folder_stats",
@@ -1250,6 +1323,37 @@ def _fallback_folder_output(
                 "data": build_folder_stats_data(descendants),
             }
         )
+
+    contributors_data = build_top_contributors_data(descendants)
+    if contributors_data.get("items"):
+        modules.append(
+            {
+                "id": "top_contributors",
+                "anchor": "top-contributors",
+                "data": contributors_data,
+            }
+        )
+
+    decisions_data = build_cross_cutting_decisions_data(descendants)
+    if decisions_data.get("items"):
+        modules.append(
+            {
+                "id": "cross_cutting_decisions",
+                "anchor": "cross-cutting-decisions",
+                "data": decisions_data,
+            }
+        )
+
+    quotes_payload = _build_quote_highlights_from_descendants(descendants)
+    if quotes_payload.get("quotes"):
+        modules.append(
+            {
+                "id": "quote_highlights",
+                "anchor": "quote-highlights",
+                "data": quotes_payload,
+            }
+        )
+
     return ModularPageOutput(
         content=f"{fallback_tldr}\n\n{fallback_summary}",
         summary=fallback_summary,
@@ -1258,6 +1362,89 @@ def _fallback_folder_output(
         rendered_module_count=len(modules),
         fell_back=True,
     )
+
+
+_QUOTE_IMPORTANCE_SCORES: dict[str, int] = {
+    "critical": 9,
+    "high": 7,
+    "medium": 5,
+    "low": 3,
+}
+
+
+def _quote_importance_score(value: Any) -> float:
+    """Bucket-or-numeric importance score for fact ranking. Mirrors
+    the simple importance buckets used elsewhere in the module
+    builders (critical=9, high=7, medium=5, low=3). Numeric inputs
+    pass through; non-numeric / unknown strings fall back to 0."""
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+    if isinstance(value, str):
+        return float(_QUOTE_IMPORTANCE_SCORES.get(value.strip().lower(), 0))
+    return 0.0
+
+
+def _build_quote_highlights_from_descendants(
+    descendants: list[dict],
+    cap: int = 5,
+) -> dict[str, Any]:
+    """Build a ``quote_highlights`` payload from descendant facts.
+
+    Walks each descendant's ``facts`` list, filters to facts whose
+    ``fact_type`` normalises to ``"quote"``, sorts by importance
+    score DESC (with quality_score / score fallback for parity with
+    the orchestrator's ``_fact_score`` helper), and caps at ``cap``.
+    Pure builder — no LLM. Returns the payload shape the existing
+    ``quote_highlights.render`` consumes."""
+    quotes: list[dict[str, Any]] = []
+    for d in descendants or []:
+        if not isinstance(d, dict):
+            continue
+        for f in d.get("facts") or []:
+            if not isinstance(f, dict):
+                continue
+            if str(f.get("fact_type") or "").strip().lower() != "quote":
+                continue
+            text = str(f.get("memory_text") or f.get("text") or "").strip()
+            if not text:
+                continue
+            quotes.append(f)
+
+    def _score(f: dict) -> float:
+        for k in ("importance", "quality_score", "score"):
+            v = f.get(k)
+            if v is None:
+                continue
+            s = _quote_importance_score(v) if k == "importance" else 0.0
+            if k != "importance" and isinstance(v, (int, float)):
+                try:
+                    s = float(v)
+                except (TypeError, ValueError):
+                    s = 0.0
+            if s:
+                return s
+        return 0.0
+
+    quotes.sort(key=_score, reverse=True)
+    quotes = quotes[: max(int(cap), 0)]
+
+    formatted = [
+        {
+            "text": str(f.get("memory_text") or f.get("text") or "").strip(),
+            "author": str(f.get("author_name") or f.get("author") or "").strip(),
+            "date": str(f.get("message_ts") or f.get("date") or "")[:10],
+            "citations": str(f.get("fact_id") or ""),
+        }
+        for f in quotes
+    ]
+    return {
+        "label": "Voices",
+        "renderer_kind": "python",
+        "quotes": formatted,
+    }
 
 
 def _folder_catalog_view() -> list[dict[str, Any]]:

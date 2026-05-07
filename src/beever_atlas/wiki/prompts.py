@@ -34,6 +34,11 @@ DROPPED SECTIONS (do NOT emit):
 - "Topics at a glance" — the renderer shows folder cards + topic cards directly with previews; a duplicate bullet list is noise.
 - "Recent momentum" — the renderer shows freshness chips in the header; a vague prose summary adds no signal.
 
+AUTO-INJECTED SECTIONS (the wiki engine appends these after your output — do NOT duplicate them under any name):
+- "Recent Updates"
+- "Project Status" (a.k.a. "Project Status & Progress")
+- "Core Discussions"
+
 ## Writing style
 - **Synthesize, don't narrate.** Transform raw facts into insights. Write "The team identified context graphs as a key architecture pattern for agent safety [1]" — NOT "Jacky Chan shared a link about context graphs [1]".
 - FORBIDDEN phrases: "shared a link", "shared an article", "posted about", "mentioned that", "noted that", "presented a". These produce activity-log narration, not knowledge.
