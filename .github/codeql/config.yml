@@ -16,3 +16,26 @@ paths-ignore:
   - "**/*.test.tsx"
   - "**/*.spec.ts"
   - "**/*.spec.tsx"
+
+# Query filters — silence specific rule findings that are confirmed
+# false positives. We keep them narrow (per-file or per-query) so a
+# real issue in another file still surfaces.
+query-filters:
+  # MermaidBlock's chained-arrow regex tokenises ``-->|label|``
+  # mermaid syntax — it never filters HTML and the output flows
+  # through ``mermaid.render`` to SVG (not innerHTML). The CodeQL
+  # rule is shaped for HTML comment-end-tag filtering and mis-
+  # classifies any regex consuming ``-->``.
+  - exclude:
+      id: js/incomplete-multi-character-sanitization
+      paths:
+        - "web/src/components/wiki/MermaidBlock.tsx"
+  # api/wiki.py merge-redirect: the target slug is fetched from the
+  # internal page_store and validated against ``[A-Za-z0-9_:-]{1,128}``
+  # before embedding in the redirect URL. CodeQL's taint propagator
+  # doesn't recognise the regex full-match as a sanitiser, so the
+  # rule fires despite the validator. Narrow exclude to that one file.
+  - exclude:
+      id: py/url-redirection-from-remote
+      paths:
+        - "src/beever_atlas/api/wiki.py"

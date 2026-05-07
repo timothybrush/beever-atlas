@@ -23,7 +23,28 @@ than raising.
 
 from __future__ import annotations
 
+import importlib
+import inspect
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any
 from urllib.parse import urlparse
+
+from beever_atlas.wiki.modules import LLMCallable, MODULE_CATALOG
+from beever_atlas.wiki.modules.planner import (
+    _HUMAN_RULES,
+    ModulePin,
+    ModulePlan,
+    _validate_plan,
+)
+from beever_atlas.wiki.render import (
+    ModuleSubstitutionError,
+    substitute_module_markers,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_hostname(url: str) -> str:
@@ -37,29 +58,6 @@ def _safe_hostname(url: str) -> str:
         return (urlparse(url).hostname or "").lower()
     except ValueError:
         return ""
-
-
-import importlib
-import inspect
-import json
-import logging
-import re
-from dataclasses import dataclass, field
-from typing import Any
-
-from beever_atlas.wiki.modules import LLMCallable, MODULE_CATALOG
-from beever_atlas.wiki.modules.planner import (
-    ModulePin,
-    ModulePlan,
-    _HUMAN_RULES,
-    _validate_plan,
-)
-from beever_atlas.wiki.render import (
-    ModuleSubstitutionError,
-    substitute_module_markers,
-)
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
