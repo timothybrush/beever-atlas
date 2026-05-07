@@ -1,6 +1,6 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, Fragment, useState } from "react";
 import { FileText, ExternalLink, Link2, Image as ImageIcon, Film, X, Maximize2 } from "lucide-react";
 import { MermaidBlock } from "./MermaidBlock";
 import { ChartBlock } from "./ChartBlock";
@@ -300,6 +300,162 @@ function WikiImage({ rawUrl, alt }: { rawUrl: string; alt: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Name-description bullet → styled table promoter.
+//
+// LLM-generated wiki bodies frequently emit lists of the shape:
+//
+//   - **Repository name** — Beever Atlas Documentation Repository
+//   - **Public Visibility** — Both repos are public for community access
+//   - **Mattermost Permissions** — Full administrative access required
+//
+// Today these render as plain bullets, which buries the structure.
+// When ALL items in a ``<ul>`` start with a ``<strong>`` and a
+// separator (em-dash, en-dash, hyphen, or colon), we promote the
+// list to a 2-column table so the visual reads as the data shape it
+// actually is. The existing bullet path is preserved for mixed lists.
+//
+// Threshold of 3 is conservative — short ad-hoc lists keep their
+// bullet shape; only lists that look like reference data become
+// tables.
+// ---------------------------------------------------------------------------
+
+const NAME_DESC_PROMOTE_THRESHOLD = 3;
+// Em-dash, en-dash, double-hyphen, single-hyphen-with-spaces, or colon.
+// All four are observed separators in the LLM output.
+const NAME_DESC_SEPARATOR_RE = /^\s*(?:[—–]|--|-(?=\s)|:)\s+([\s\S]*)$/;
+
+function asReactElement(
+  node: ReactNode,
+): React.ReactElement<{ children?: ReactNode }> | null {
+  if (node && typeof node === "object" && "props" in (node as object)) {
+    return node as React.ReactElement<{ children?: ReactNode }>;
+  }
+  return null;
+}
+
+function tryExtractNameDescRow(
+  liNode: ReactNode,
+): { name: ReactNode; desc: ReactNode[] } | null {
+  const li = asReactElement(liNode);
+  if (!li) return null;
+  const liChildren = li.props?.children;
+  if (liChildren == null) return null;
+
+  // ReactMarkdown wraps li content in a <p> for loose lists, and the
+  // existing ``processChildren`` (which the ``li`` component override
+  // calls before mounting) wraps multi-node content in a Fragment.
+  // Unwrap iteratively (capped to avoid infinite loops on pathological
+  // shapes) so the bold-prefix detection below sees the actual
+  // leading <strong> element.
+  let arr: ReactNode[] = Array.isArray(liChildren) ? liChildren : [liChildren];
+  for (let depth = 0; depth < 4; depth++) {
+    if (arr.length !== 1) break;
+    const sole = asReactElement(arr[0]);
+    if (!sole) break;
+    const wrapperType = (sole as unknown as { type: unknown }).type;
+    if (
+      wrapperType === "p" ||
+      wrapperType === "div" ||
+      wrapperType === Fragment
+    ) {
+      const inner = sole.props?.children;
+      arr = Array.isArray(inner) ? inner : [inner];
+      continue;
+    }
+    break;
+  }
+
+  // First non-whitespace child must be a <strong> element. Whitespace-only
+  // strings are skipped so leading indentation in the source doesn't
+  // disqualify a row.
+  let firstIdx = -1;
+  for (let i = 0; i < arr.length; i++) {
+    const c = arr[i];
+    if (typeof c === "string" && c.trim() === "") continue;
+    firstIdx = i;
+    break;
+  }
+  if (firstIdx < 0) return null;
+  const first = asReactElement(arr[firstIdx]);
+  if (!first) return null;
+  // The leading element must render as bold. Two shapes are accepted:
+  //   - the raw HTML tag ``<strong>`` (no components-dict override)
+  //   - the strong-override function whose ``name`` / ``displayName``
+  //     is ``"strong"`` (the case in this renderer — see the
+  //     ``components.strong`` entry below)
+  const firstType = (first as unknown as { type: unknown }).type;
+  const firstFn = firstType as { name?: string; displayName?: string };
+  const isStrong =
+    firstType === "strong" ||
+    (typeof firstType === "function" &&
+      (firstFn.name === "strong" || firstFn.displayName === "strong"));
+  if (!isStrong) return null;
+
+  const name = first.props?.children;
+  const rest = arr.slice(firstIdx + 1);
+
+  // Concatenate the leading text of the rest to test for the separator.
+  // We only need the FIRST string-typed node — the separator always
+  // appears at the start of the body text (em-dash / colon).
+  const restText = rest.map(extractText).join("");
+  const m = restText.match(NAME_DESC_SEPARATOR_RE);
+  if (!m) return null;
+
+  // Strip the separator from the leading text node so the desc cell
+  // starts cleanly. Subsequent nodes (citations, wikilinks, etc.) are
+  // preserved by reference so their interactivity survives.
+  const stripped: ReactNode[] = [];
+  let separatorRemoved = false;
+  for (const node of rest) {
+    if (!separatorRemoved && typeof node === "string") {
+      const replaced = node.replace(NAME_DESC_SEPARATOR_RE, "$1");
+      if (replaced !== node) {
+        separatorRemoved = true;
+        if (replaced.length > 0) stripped.push(replaced);
+        continue;
+      }
+    }
+    stripped.push(node);
+  }
+  return { name, desc: stripped };
+}
+
+interface NameDescTableProps {
+  rows: { name: ReactNode; desc: ReactNode[] }[];
+}
+
+function NameDescTable({ rows }: NameDescTableProps) {
+  return (
+    <div className="overflow-x-auto my-4">
+      <table className="min-w-full text-sm border-collapse border border-border rounded-md">
+        <thead>
+          <tr>
+            <th className="border border-border bg-muted px-3 py-2 text-left font-semibold text-foreground w-1/3 min-w-[12ch]">
+              Name
+            </th>
+            <th className="border border-border bg-muted px-3 py-2 text-left font-semibold text-foreground">
+              Description
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} className={i % 2 === 1 ? "bg-muted/20" : undefined}>
+              <td className="border border-border px-3 py-2 align-top text-foreground font-medium">
+                {row.name}
+              </td>
+              <td className="border border-border px-3 py-2 align-top text-muted-foreground">
+                {row.desc}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function WikiPdfLink({ href, title }: { href: string; title: string }) {
   const [expanded, setExpanded] = useState(false);
   const proxied = proxyUrl(href);
@@ -427,6 +583,27 @@ export function WikiMarkdown({
           return <h4 className="text-base font-semibold text-foreground/90 mt-3 mb-1">{processChildren(children, ci, "h4")}</h4>;
         },
         ul({ children }) {
+          // Detect lists where every item is a ``**Name** — desc`` pair
+          // and ≥3 items match. Promote those to a styled 2-column
+          // table so the visual reads as the structured data it is,
+          // not as a sea of bullets. Mixed lists or short lists fall
+          // through to the existing bullet renderer.
+          const liNodes = Array.isArray(children) ? children : [children];
+          const candidateRows: { name: ReactNode; desc: ReactNode[] }[] = [];
+          let allMatch = true;
+          for (const node of liNodes) {
+            if (node == null || node === false || node === true) continue;
+            if (typeof node === "string" && node.trim() === "") continue;
+            const row = tryExtractNameDescRow(node);
+            if (!row) {
+              allMatch = false;
+              break;
+            }
+            candidateRows.push(row);
+          }
+          if (allMatch && candidateRows.length >= NAME_DESC_PROMOTE_THRESHOLD) {
+            return <NameDescTable rows={candidateRows} />;
+          }
           return <ul className="list-disc list-inside space-y-1 my-3 text-foreground/80">{children}</ul>;
         },
         ol({ children }) {
