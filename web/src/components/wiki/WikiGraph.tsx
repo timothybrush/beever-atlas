@@ -28,6 +28,7 @@ import { useWikiGraph, type WikiGraphPayload, type WikiGraphNode } from "@/hooks
 import { useWikiPage } from "@/hooks/useWikiPage";
 import { WikiMarkdown } from "@/components/wiki/WikiMarkdown";
 import { cn } from "@/lib/utils";
+import { buildWikiPath } from "@/lib/wikiNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -452,9 +453,11 @@ export function WikiGraph({ channelId: channelIdOverride }: WikiGraphProps = {})
       const fakeNode: WikiGraphNode = { data: nodeData as WikiGraphNode["data"] };
       const sel = selectionFromNode(fakeNode);
       if (sel.isEntity || sel.isChannel || !sel.pageId) return;
-      navigate(
-        `/channels/${channelId}/wiki?page=${encodeURIComponent(sel.pageId)}`,
-      );
+      // Path-based wiki routes — the graph node's ``pageId`` field
+      // doubles as the slug here (the structure planner uses the
+      // same identifier in both fields). The WikiTab's slug→id map
+      // resolves it back to the page on mount.
+      navigate(buildWikiPath(channelId, sel.pageId));
     },
     [channelId, navigate],
   );
@@ -1589,9 +1592,7 @@ function WikiGraphPanel({ channelId, selection, onClose }: WikiGraphPanelProps) 
   );
   const goToWikiPage = () => {
     if (!channelId || !selection.pageId) return;
-    navigate(
-      `/channels/${channelId}/wiki?page=${encodeURIComponent(selection.pageId)}`,
-    );
+    navigate(buildWikiPath(channelId, selection.pageId));
   };
 
   // Resizable width state — pixel-controlled instead of Tailwind class

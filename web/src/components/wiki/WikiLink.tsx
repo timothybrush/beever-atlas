@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { buildWikiPath } from "@/lib/wikiNav";
 
 interface WikiLinkProps {
   /** Bracketed title the LLM emitted, e.g. "Authentication". */
@@ -28,7 +29,7 @@ export function WikiLink({ title, slug }: WikiLinkProps) {
     return (
       <Link
         className="wiki-link text-primary hover:underline"
-        to={`/channels/${channelId}/wiki/pages/${slug}`}
+        to={buildWikiPath(channelId, slug)}
         data-testid="wiki-link"
         data-slug={slug}
       >

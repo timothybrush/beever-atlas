@@ -80,9 +80,12 @@ function AppShell() {
               <Route path="/channels/:id" element={<ChannelWorkspace />}>
                 <Route index element={<ChannelDefaultRedirect />} />
                 <Route path="wiki" element={<WikiTab />} />
+                <Route path="wiki/:slug" element={<WikiTab />} />
                 {/* Legacy redirects — the wiki + entity graphs now live
                     inside their parent tabs via ?view=graph so existing
-                    deep-links and toolbar bookmarks keep working. */}
+                    deep-links and toolbar bookmarks keep working.
+                    These remain MORE SPECIFIC than ``wiki/:slug`` so
+                    React Router matches them first. */}
                 <Route
                   path="wiki/graph"
                   element={<Navigate to="../wiki?view=graph" replace />}

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, Suspense, lazy, type ReactNode } from "react";
-import { useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 import { wikiT } from "@/lib/wikiI18n";
+import { buildWikiPath, preserveQueryParams } from "@/lib/wikiNav";
 import { RefreshCw, BookOpen, AlertTriangle, Sparkles, Network, FileText, Loader2, CheckCircle2, Circle, ArrowRight, FolderSync, History as HistoryIcon, Download } from "lucide-react";
 
 // Lazy-load the wiki graph so cytoscape (~200 KB) stays out of the
@@ -496,8 +497,9 @@ function renderPage(
 }
 
 export function WikiTab() {
-  const { id: channelId } = useParams<{ id: string }>();
+  const { id: channelId, slug: routeSlug } = useParams<{ id: string; slug?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   // Null-safe outlet destructure — ``useOutletContext`` returns ``null``
   // when the component is rendered outside an ``<Outlet context={...}>``
   // (e.g., the vitest harness in WikiTab.test.tsx). Without the ``?? {}``
@@ -509,15 +511,11 @@ export function WikiTab() {
     isSyncing?: boolean;
     syncState?: SyncState;
   }>() ?? {};
-  // ``?page={pageId}`` deep-link — seeded on mount, supports the
-  // "Open in Wiki tab" button on the wiki graph view's preview panel.
-  // The state-setter below clears the param when the user navigates
-  // internally so the URL stays in sync with what they see.
+  // ``searchParams`` still drives view/lang/version state — only the
+  // legacy ``?page=`` query is dead. ``setSearchParams`` is used for
+  // those non-page params; page navigation goes through ``navigate``
+  // with ``buildWikiPath``.
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialPageParam = searchParams.get("page");
-  const [activePageId, setActivePageId] = useState<string>(
-    initialPageParam || "overview",
-  );
   // ``?view=graph`` keeps the wiki cross-link graph mounted in-tab so
   // a back-button or refresh restores what the operator was looking
   // at. The toggle writes via ``replace: true`` so flipping doesn't
@@ -532,20 +530,28 @@ export function WikiTab() {
     }
     setSearchParams(updated, { replace: true });
   }, [searchParams, setSearchParams]);
-  // Strip ``?page=...`` from the URL on first paint so a subsequent
-  // refresh doesn't re-jump the user back to the deep-link target
-  // after they have navigated within the wiki tab.
-  useEffect(() => {
-    if (initialPageParam) {
-      const next = new URLSearchParams(searchParams);
-      next.delete("page");
-      setSearchParams(next, { replace: true });
-    }
-    // Run once on mount; subsequent ``?page`` changes are intentional
-    // navigations (e.g. another tab links to a specific page).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  const [viewingVersionNumber, setViewingVersionNumber] = useState<number | null>(null);
+  // ``viewingVersionNumber`` is URL-driven via ``?version=N`` so a
+  // browser refresh, a shared link, or a navigation in-place all
+  // restore the historical-version view. Local state would silently
+  // drop the version on reload — the user reported this regression.
+  const versionParam = searchParams.get("version");
+  const viewingVersionNumber: number | null = useMemo(() => {
+    if (!versionParam) return null;
+    const n = parseInt(versionParam, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }, [versionParam]);
+  const setViewingVersionNumber = useCallback(
+    (next: number | null) => {
+      const updated = new URLSearchParams(searchParams);
+      if (next === null || next <= 0) {
+        updated.delete("version");
+      } else {
+        updated.set("version", String(next));
+      }
+      setSearchParams(updated, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
   const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
 
   const [langConfig, setLangConfig] = useState<LanguageConfig | null>(null);
@@ -570,6 +576,89 @@ export function WikiTab() {
   const { data: wiki, isLoading, error, isNotFound, refetch } = useWiki(channelId, targetLang);
   const { hasMemories, isLoading: isMemoryCountLoading, refetch: refetchMemoryCount } = useChannelMemoryCount(channelId);
 
+  // ── Slug ↔ pageId maps ─────────────────────────────────────────────
+  // Path-based routing means the URL carries a SLUG (human-readable,
+  // SEO-friendly), but every component below works with PAGE IDs
+  // (stable identifiers). We build the bidirectional map once the
+  // wiki document is available, then resolve the route slug to a
+  // page id below.
+  const { slugToId, idToSlug } = useMemo(() => {
+    const slugToId = new Map<string, string>();
+    const idToSlug = new Map<string, string>();
+    const walk = (nodes: WikiPageNode[] | undefined): void => {
+      for (const n of nodes ?? []) {
+        if (n.slug) slugToId.set(n.slug, n.id);
+        if (n.id) idToSlug.set(n.id, n.slug);
+        if (n.children?.length) walk(n.children);
+      }
+    };
+    walk(wiki?.structure?.pages);
+    // The overview page lives on ``wiki.overview`` (not in the
+    // structure tree) — register it explicitly so /wiki resolves
+    // back to "overview" when the path is empty AND the explicit
+    // /wiki/overview slug also resolves.
+    if (wiki?.overview) {
+      const ov = wiki.overview;
+      if (ov.slug) slugToId.set(ov.slug, ov.id);
+      if (ov.id) idToSlug.set(ov.id, ov.slug);
+    }
+    return { slugToId, idToSlug };
+  }, [wiki?.structure?.pages, wiki?.overview]);
+
+  // ── Active page id resolution ──────────────────────────────────────
+  // No slug → overview. Slug present + resolvable → resolved id.
+  // Slug present + unresolvable + wiki loaded → ``null`` (sentinel for
+  // the "Page not found" placeholder rendered below). While the wiki
+  // is still loading we hold the slug and resolve once it arrives.
+  const activePageId = useMemo<string | null>(() => {
+    if (!routeSlug) return "overview";
+    if (!wiki) return null; // wait for load
+    const resolved = slugToId.get(routeSlug);
+    if (resolved) return resolved;
+    // Tolerate the case where a caller passed a page-id where a slug
+    // was expected (older deep-links emitted by the wiki graph
+    // panel). Drop the prefix and try matching against id directly.
+    if (idToSlug.has(routeSlug)) return routeSlug;
+    return null;
+  }, [routeSlug, wiki, slugToId, idToSlug]);
+
+  const isPageNotFound = !!routeSlug && wiki !== null && activePageId === null;
+
+  // ── Legacy ?page= scrub ────────────────────────────────────────────
+  // Deep-links from older surfaces (the wiki graph preview panel,
+  // bookmarks, marketing emails) still arrive as ``?page=<pageId>``.
+  // Once the wiki document is available we map the legacy id → slug
+  // and rewrite the URL to the new path-based shape, preserving every
+  // OTHER query param (``view``, ``lang``, ``version``).
+  useEffect(() => {
+    if (!wiki || !channelId) return;
+    const legacyPageParam = searchParams.get("page");
+    if (!legacyPageParam) return;
+
+    const slug = idToSlug.get(legacyPageParam);
+    if (!slug) {
+      // Unknown legacy id — strip the param but stay on overview to
+      // avoid a 404 loop. The "Page not found" placeholder below is
+      // for *path*-shaped slugs the user typed in directly, not
+      // legacy query-string ids.
+      const search = preserveQueryParams(searchParams, ["page"]);
+      navigate(
+        { pathname: location.pathname, search },
+        { replace: true },
+      );
+      return;
+    }
+    const search = preserveQueryParams(searchParams, ["page"]);
+    navigate(
+      { pathname: buildWikiPath(channelId, slug), search },
+      { replace: true },
+    );
+    // ``location.pathname`` and ``navigate`` are stable; we explicitly
+    // re-fire when the wiki document or the page param changes so a
+    // late-arriving wiki still triggers the scrub.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wiki, channelId, searchParams, idToSlug]);
+
   // Derive manual mode from the effective channel policy.
   // The Maintain Wiki button was removed in the action redesign — the
   // unified "Update wiki" primary action covers the same flow with
@@ -584,8 +673,16 @@ export function WikiTab() {
     viewingVersionNumber ?? undefined,
   );
 
-  // Only fetch non-overview pages lazily (when not viewing a version)
-  const lazyPageId = viewingVersionNumber === null && activePageId !== "overview" ? activePageId : undefined;
+  // Only fetch non-overview pages lazily (when not viewing a version).
+  // ``activePageId`` is nullable when the route slug is unresolvable;
+  // skip the fetch in that case so the "Page not found" placeholder
+  // renders without an extra useless request.
+  const lazyPageId =
+    viewingVersionNumber === null &&
+    activePageId !== null &&
+    activePageId !== "overview"
+      ? activePageId
+      : undefined;
   const { data: pageData, isLoading: isPageLoading } = useWikiPage(channelId, lazyPageId, targetLang);
 
   const {
@@ -721,12 +818,14 @@ export function WikiTab() {
 
   // Accepts either a page-id (e.g. "topic-auth", "folder-foo") OR a
   // raw slug (e.g. "topic-auth" without prefix, as the LLM emits in
-  // See Also / Related / children TOC links). Resolves slugs by
-  // walking the structure tree; falls back to the input if no node
-  // matches so deep-link routes still work.
+  // See Also / Related / children TOC links). Resolves to a slug by
+  // walking the structure tree, then navigates via path-based URL
+  // ``/channels/:id/wiki/:slug`` so the address bar mirrors the
+  // active page. Other query params (``view``, ``lang``, ``version``)
+  // are preserved across the navigation.
   const handleNavigate = useCallback(
     (pageIdOrSlug: string) => {
-      if (!pageIdOrSlug) return;
+      if (!pageIdOrSlug || !channelId) return;
       const pages = wiki?.structure?.pages ?? [];
       const walk = (nodes: WikiPageNode[]): WikiPageNode | null => {
         for (const n of nodes) {
@@ -737,20 +836,36 @@ export function WikiTab() {
         return null;
       };
       const node = walk(pages);
-      setActivePageId(node ? node.id : pageIdOrSlug);
+      // Navigating to the overview drops the slug segment entirely so
+      // the URL reads ``/channels/{id}/wiki`` instead of
+      // ``/channels/{id}/wiki/overview``.
+      const targetSlug = node
+        ? node.id === "overview"
+          ? undefined
+          : (node.slug ?? pageIdOrSlug)
+        : pageIdOrSlug;
+      const search = preserveQueryParams(searchParams);
+      navigate(`${buildWikiPath(channelId, targetSlug)}${search}`);
     },
-    [wiki?.structure?.pages],
+    [channelId, wiki?.structure?.pages, searchParams, navigate],
   );
 
-  const handleSelectVersion = useCallback((versionNumber: number) => {
-    setViewingVersionNumber(versionNumber);
-    setActivePageId("overview");
-  }, []);
+  // Selecting a historical version writes ``?version=N`` to the URL
+  // (via ``setViewingVersionNumber``). The user STAYS on whichever
+  // page they were viewing — ``versionData.pages`` is a per-page
+  // dict so the overlay works on any topic / folder, not just the
+  // overview. ``preserveQueryParams`` carries ``?version`` across
+  // subsequent slug navigations.
+  const handleSelectVersion = useCallback(
+    (versionNumber: number) => {
+      setViewingVersionNumber(versionNumber);
+    },
+    [setViewingVersionNumber],
+  );
 
   const handleBackToCurrent = useCallback(() => {
     setViewingVersionNumber(null);
-    setActivePageId("overview");
-  }, []);
+  }, [setViewingVersionNumber]);
 
   const handleDownload = useCallback(async () => {
     try {
@@ -964,9 +1079,13 @@ export function WikiTab() {
   const activeStructure = isViewingVersion ? versionData.structure : wiki.structure;
   const activeOverview = isViewingVersion ? versionData.overview : wiki.overview;
 
-  // Resolve the active page
+  // Resolve the active page. ``activePageId`` is null when the route
+  // slug doesn't match any known page (the "Page not found" path);
+  // we fall back to ``null`` so the placeholder renders below.
   let activePage: WikiPage | null;
-  if (isViewingVersion) {
+  if (activePageId === null) {
+    activePage = null;
+  } else if (isViewingVersion) {
     activePage = activePageId === "overview"
       ? activeOverview
       : (versionData.pages[activePageId] ?? null);
@@ -995,6 +1114,25 @@ export function WikiTab() {
     pageContent = (
       <div className="flex items-center justify-center py-16">
         <RefreshCw className="w-5 h-5 animate-spin text-muted-foreground" />
+      </div>
+    );
+  } else if (isPageNotFound) {
+    // Path-based slug didn't resolve to any page in the loaded wiki —
+    // typically a stale bookmark or a typo'd URL. Lightweight
+    // placeholder rather than a redirect so the user can see WHICH
+    // slug failed and act on it.
+    pageContent = (
+      <div
+        className="flex flex-col items-center justify-center py-16 text-center"
+        data-testid="wiki-page-not-found"
+      >
+        <FileText className="w-8 h-8 text-muted-foreground/40 mb-3" />
+        <p className="text-sm text-muted-foreground">
+          Page not found
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground/70">
+          No wiki page matches “{routeSlug}”.
+        </p>
       </div>
     );
   } else if (!activePage) {

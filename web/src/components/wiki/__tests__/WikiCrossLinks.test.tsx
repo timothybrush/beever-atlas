@@ -2,7 +2,7 @@
  * Frontend test for the wiki-llm-native-redesign cross-links renderer
  * (task §4.14). Verifies that:
  *   - Resolved [[Title]] references render as clickable anchors to
- *     /channels/:id/wiki/pages/:slug
+ *     /channels/:id/wiki/:slug (path-based routing, see ``buildWikiPath``)
  *   - Unresolved (broken) references render as red-dashed buttons
  *     that open a "No page yet" modal
  */
@@ -36,7 +36,7 @@ describe("WikiMarkdown — [[wikilink]] renderer", () => {
     const anchor = screen.getByTestId("wiki-link");
     expect(anchor).toHaveAttribute(
       "href",
-      "/channels/c1/wiki/pages/topic-auth",
+      "/channels/c1/wiki/topic-auth",
     );
     expect(anchor).toHaveTextContent("Authentication");
     expect(anchor).toHaveAttribute("data-slug", "topic-auth");
