@@ -17,6 +17,11 @@ import { createTeamsAdapter } from "@chat-adapter/teams";
 import { createTelegramAdapter } from "@chat-adapter/telegram";
 import { createMattermostAdapter } from "chat-adapter-mattermost";
 import { createRedisState } from "@chat-adapter/state-redis";
+// M6: safeErrorMessage logs only the error message (whitespace-collapsed and
+// length-capped) so stack traces / token values never reach container logs or
+// log aggregators. Single shared definition lives in http-utils and is reused
+// here, in bridge.ts, and in index.ts.
+import { safeErrorMessage } from "./http-utils.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -148,7 +153,7 @@ export class ChatManager {
         try {
           await this.currentBot.shutdown();
         } catch (err: unknown) {
-          console.warn("ChatManager: error during shutdown:", err);
+          console.warn("ChatManager: error during shutdown:", safeErrorMessage(err));
         }
         this.currentBot = null;
       }
@@ -202,7 +207,7 @@ export class ChatManager {
                 console.log(`ChatManager: cached Slack team_id=${authResult.team_id} → connection=${entry.connectionId}`);
               }
             } catch (err) {
-              console.warn(`ChatManager: auth.test failed for "${key}", file routing may be degraded:`, err);
+              console.warn(`ChatManager: auth.test failed for "${key}", file routing may be degraded:`, safeErrorMessage(err));
             }
           } else if (entry.platform === "discord") {
             const discordOpts: Record<string, unknown> = {
@@ -235,7 +240,7 @@ export class ChatManager {
             console.warn(`ChatManager: unknown platform "${entry.platform}", skipping`);
           }
         } catch (err) {
-          console.error(`ChatManager: failed to create adapter for "${key}":`, err);
+          console.error(`ChatManager: failed to create adapter for "${key}":`, safeErrorMessage(err));
         }
       }
 
@@ -252,6 +257,21 @@ export class ChatManager {
 
       this.registerHandlers(newBot);
       this.currentBot = newBot;
+
+      // Eagerly initialize the Chat instance so every adapter gets
+      // `initialize(chat)` called (which sets `adapter.chat` and connects the
+      // Redis state). The Chat SDK otherwise defers this until the first
+      // inbound webhook, which left bridge-driven reads (e.g. Teams Graph
+      // channel-message fetch via `getGraphContext` → Redis cache) unable to
+      // resolve context until the bot had been @mentioned. Initializing here
+      // makes history fetch work without an @mention, like the other bridges.
+      // Best-effort: a failure must not abort the rebuild for other platforms.
+      try {
+        await newBot.initialize();
+      } catch (err) {
+        console.warn("ChatManager: Chat.initialize() failed (adapters still registered):", safeErrorMessage(err));
+      }
+
 
       console.log(`ChatManager: bot rebuilt with adapters: ${Object.keys(adapterInstances).join(", ")}`);
     } finally {
@@ -301,7 +321,7 @@ export class ChatManager {
           this.consecutiveRecycleFailures++;
           console.error(
             `ChatManager: scheduled recycle failed (${this.consecutiveRecycleFailures}/${ChatManager.RECYCLE_FAILURE_LIMIT}):`,
-            err,
+            safeErrorMessage(err),
           );
           if (this.consecutiveRecycleFailures >= ChatManager.RECYCLE_FAILURE_LIMIT) {
             console.error(

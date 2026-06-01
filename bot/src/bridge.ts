@@ -24,6 +24,7 @@ import {
   readBody,
   BodyTooLargeError,
   messageForCode,
+  safeErrorMessage,
 } from "./http-utils.js";
 export { jsonResponse, safeErrorMessage, messageForCode } from "./http-utils.js";
 import { logger } from "./logger.js";
@@ -468,6 +469,29 @@ function encodeUrlSearch(search: string): string {
     return `${k}=${v}`;
   });
   return `?${safePairs.join("&")}`;
+}
+
+/**
+ * Decode a single percent-encoded channel-id or thread-id route segment.
+ *
+ * Connection routes capture the channel id with `([^/]+)` and pass it through
+ * verbatim. Teams channel ids contain `:` and `@` (e.g.
+ * `19:abc@thread.tacv2`), which an HTTP client may percent-encode to
+ * `19%3Aabc%40thread.tacv2`. Without decoding, the id no longer matches the
+ * `19:…@thread` channel shape and downstream Graph reads misfire. This is a
+ * no-op for ids without `%` sequences (Slack `C0…`, Discord/Telegram numeric,
+ * Mattermost alphanumeric), so it is safe for every platform. Malformed `%xx`
+ * falls back to the raw segment.
+ *
+ * Applied at ALL route callsites that capture a channel-id or thread-id
+ * segment: connection-scoped, platform-prefixed, and legacy routes (H1).
+ */
+function decodeChannelSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
 }
 
 class SlackBridge implements PlatformBridge {
@@ -992,7 +1016,7 @@ class DiscordBridge implements PlatformBridge {
             }
           }
         } catch (err) {
-          console.warn(`DiscordBridge: failed to list channels for guild ${guild.id}:`, err);
+          console.warn(`DiscordBridge: failed to list channels for guild ${guild.id}:`, safeErrorMessage(err));
         }
       }
 
@@ -1004,10 +1028,10 @@ class DiscordBridge implements PlatformBridge {
     } catch (err) {
       // If we have stale cached data, return it instead of empty
       if (this.channelCache) {
-        console.warn("DiscordBridge: listChannels failed, returning stale cache:", String(err).slice(0, 100));
+        console.warn("DiscordBridge: listChannels failed, returning stale cache:", safeErrorMessage(err));
         return this.channelCache.data;
       }
-      console.error("DiscordBridge: listChannels error (no cache):", err);
+      console.error("DiscordBridge: listChannels error (no cache):", safeErrorMessage(err));
       return [];
     }
   }
@@ -1195,9 +1219,19 @@ class DiscordBridge implements PlatformBridge {
 // Microsoft.GraphServices metered account configured (pay-per-call) or a
 // Teams Data API license for those calls to return data.
 //
-// listChannels still reads from `teamsConversationRegistry` so conversations
-// the bot has observed via webhook surface immediately, even before the first
-// message-history fetch.
+// listChannels merges two sources:
+//   1. `teamsConversationRegistry` — populated from inbound webhooks (fast,
+//      ephemeral, survives only until bot restart).
+//   2. `teamsKnownTeamIds` + Microsoft Graph `GET /teams/{id}/channels` —
+//      populated from install/conversationUpdate events that carry
+//      `channelData.team.aadGroupId`, AND from the adapter's Redis
+//      `channelContext` cache (warm across restarts). This lets channels appear
+//      in the sidebar with ZERO @mention, matching Slack/Discord/Mattermost.
+//
+// Required Graph permission: `ChannelSettings.Read.Group` (RSC, no admin
+// consent — add via `teams app rsc add <appId> ChannelSettings.Read.Group
+// --type Application` and re-upload the manifest) OR application permission
+// `Channel.ReadBasic.All` (admin consent required). See listChannels() below.
 
 interface TeamsConversationRecord {
   conversationId: string;
@@ -1213,12 +1247,39 @@ interface TeamsConversationRecord {
 
 const teamsConversationRegistry = new Map<string, Map<string, TeamsConversationRecord>>();
 
+/**
+ * Per-connection set of AAD group IDs (a.k.a. "team ids" in Graph) for teams
+ * the bot is installed in. Populated by `recordTeamsConversation` when a Bot
+ * Framework activity carries `channelData.team.aadGroupId` (present in install
+ * and conversationUpdate events). Used by `TeamsBridge.listChannels` to call
+ * `GET /teams/{aadGroupId}/channels` without any prior @mention.
+ *
+ * Survives adapter recycles (module-level singleton) but is wiped on process
+ * restart. `listChannels` performs a one-shot Redis SCAN per connection to
+ * re-seed it on first cold-start (see `teamsColdStartScanned`).
+ */
+const teamsKnownTeamIds = new Map<string, Set<string>>();
+
+/**
+ * H3/M1: one-shot guard — tracks which connectionIds have already completed
+ * the cold-start Redis SCAN. Prevents re-scanning on every `listChannels` call
+ * and avoids the blocking `KEYS` pattern entirely.
+ */
+const teamsColdStartScanned = new Set<string>();
+
+/**
+ * A Microsoft Graph team-id is the team's AAD group object id — a GUID. Used to
+ * validate teamIds sourced from the shared Redis channelContext cache before
+ * they are interpolated into a Graph API path, so a poisoned cache entry cannot
+ * inject an arbitrary value into `graph.call(...{ "team-id": ... })`.
+ */
+const TEAMS_AAD_GROUP_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** RES-286 — Teams "I've seen this conversation" registry is populated from
- *  webhooks and is the only source of truth for `TeamsBridge.listChannels()`
- *  (Bot Framework exposes no list API). It must NOT be wholesale-cleared on
- *  adapter recycle — that would empty the sidebar until each conversation
- *  posts again. Instead, drop only entries whose `lastSeenAt` is older than
- *  `maxAgeMs` (default 30 days). Returns the number of entries pruned. */
+ *  webhooks. It must NOT be wholesale-cleared on adapter recycle — that would
+ *  empty the sidebar until each conversation posts again. Instead, drop only
+ *  entries whose `lastSeenAt` is older than `maxAgeMs` (default 30 days).
+ *  Returns the number of entries pruned. */
 export function pruneStaleTeamsConversations(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000): number {
   const cutoff = Date.now() - maxAgeMs;
   let pruned = 0;
@@ -1239,7 +1300,7 @@ export function recordTeamsConversation(
   activity: {
     conversation?: { id?: string; conversationType?: string; name?: string; tenantId?: string };
     channelData?: {
-      team?: { id?: string; name?: string };
+      team?: { id?: string; name?: string; aadGroupId?: string };
       channel?: { id?: string; name?: string };
       tenant?: { id?: string };
     };
@@ -1287,6 +1348,44 @@ export function recordTeamsConversation(
     tenantId: activity.conversation?.tenantId || activity.channelData?.tenant?.id || null,
     lastSeenAt: Date.now(),
   });
+
+  // On a team install/membership event (conversationUpdate / installationUpdate)
+  // `conversation.id` is the TEAM ROOT, while the actual channel lives in
+  // `channelData.channel`. Register that channel directly so it surfaces in
+  // listChannels — and is therefore fetchable via Graph — without ever needing
+  // an @mention inside it (Slack/Discord/Mattermost-style discovery).
+  const installChannelId = activity.channelData?.channel?.id?.split(";")[0];
+  if (installChannelId && installChannelId !== conversationId) {
+    bucket.set(installChannelId, {
+      conversationId: installChannelId,
+      name: teamName && channelName
+        ? `${teamName} / ${channelName}`
+        : channelName || teamName || installChannelId,
+      conversationType: "channel",
+      teamId: activity.channelData?.team?.id || null,
+      teamName,
+      channelName,
+      // serviceUrl intentionally left null for install-discovered channels:
+      // Graph channel reads don't need it; it's filled in if a message arrives.
+      serviceUrl: activity.serviceUrl || null,
+      tenantId: activity.conversation?.tenantId || activity.channelData?.tenant?.id || null,
+      lastSeenAt: Date.now(),
+    });
+  }
+
+  // Persist the AAD group id (Graph team id) for this team so that
+  // TeamsBridge.listChannels can enumerate channels via Graph without any
+  // prior @mention. Bot Framework install/conversationUpdate activities carry
+  // `channelData.team.aadGroupId`; regular channel-message activities may not.
+  const aadGroupId = activity.channelData?.team?.aadGroupId;
+  if (aadGroupId) {
+    let teamSet = teamsKnownTeamIds.get(connectionId);
+    if (!teamSet) {
+      teamSet = new Set();
+      teamsKnownTeamIds.set(connectionId, teamSet);
+    }
+    teamSet.add(aadGroupId);
+  }
 }
 
 function teamsRecordToChannel(entry: TeamsConversationRecord): NormalizedChannel {
@@ -1304,9 +1403,39 @@ function teamsRecordToChannel(entry: TeamsConversationRecord): NormalizedChannel
 const TEAMS_PAGE_SIZE = 50;
 const TEAMS_MESSAGE_COUNT_CAP = 500;
 
+/**
+ * PERF: fire-and-forget MSAL Graph token pre-warm for a single Teams adapter.
+ * The acquired client-credentials token is shared across ALL Graph reads —
+ * channel enumeration AND message fetches — so warming it removes the
+ * ~1.5–2.5s cold-acquire penalty from the first user request after startup or
+ * an adapter recycle. No-op for non-Teams adapters (no app.graph.http), so it
+ * is safe to call indiscriminately. Errors are swallowed: the first real
+ * request will acquire the token if this races or fails.
+ */
+export function warmTeamsGraphToken(adapter: unknown): void {
+  const graphHttp = (adapter as { app?: { graph?: { http?: { get?: (path: string) => Promise<unknown> } } } })
+    ?.app?.graph?.http;
+  if (graphHttp && typeof graphHttp.get === "function") {
+    try {
+      Promise.resolve(graphHttp.get("/organization?$top=1")).catch(() => { /* token acquired lazily on first real call */ });
+    } catch {
+      /* a synchronous throw from get() must not propagate — same lazy fallback */
+    }
+  }
+}
+
 class TeamsBridge implements PlatformBridge {
   private adapter: TeamsAdapter;
   private connectionId: string;
+  /** PERF: cache of the slow Microsoft Graph channel enumeration — one
+   *  ~1–1.5s round-trip per installed team. The live webhook registry is merged
+   *  fresh on every listChannels call, so ONLY this expensive Graph part is
+   *  cached. Mirrors DiscordBridge.channelCache. Per-instance, wiped on adapter
+   *  recycle (bridgeCache.clear). Populated only on a successful enumeration
+   *  that returned ≥1 channel, so a not-yet-discovered team is never masked. */
+  private graphChannelCache: { data: NormalizedChannel[]; expiresAt: number } | null = null;
+  private graphChannelFetchInFlight: Promise<NormalizedChannel[]> | null = null;
+  private static readonly GRAPH_CHANNEL_CACHE_TTL_MS = 60_000; // 60s
 
   constructor(adapter: TeamsAdapter, connectionId: string) {
     this.adapter = adapter;
@@ -1318,20 +1447,215 @@ class TeamsBridge implements PlatformBridge {
   }
 
   async listChannels(): Promise<NormalizedChannel[]> {
+    // Phase 1 — in-memory registry (inbound webhooks / conversationUpdates).
+    // Always recomputed: a cheap Map read that must reflect webhook updates
+    // (new DMs/channels) the instant they arrive, so it is NOT cached.
     const bucket = teamsConversationRegistry.get(this.connectionId);
-    if (!bucket || bucket.size === 0) return [];
-    return Array.from(bucket.values()).map(teamsRecordToChannel);
+    const registryChannels = bucket
+      ? Array.from(bucket.values())
+          .filter((e) => e.conversationType === "channel")
+          .map(teamsRecordToChannel)
+      : [];
+
+    // Phase 2 — Graph enumeration (zero @mention required). The slow part: a
+    // Redis cold-start scan plus one Graph round-trip per installed team.
+    // Cached with a short TTL and concurrent-call dedup (see below).
+    const graphChannels = await this.listGraphChannelsCached();
+
+    // Merge: Graph results are authoritative; supplement with registry entries
+    // for conversations (DMs, group chats) that Graph doesn't enumerate.
+    if (graphChannels.length > 0) {
+      const graphIds = new Set(graphChannels.map((c) => c.channel_id));
+      const extras = registryChannels.filter((c) => !graphIds.has(c.channel_id));
+      return [...graphChannels, ...extras];
+    }
+
+    // Graph unavailable or no teamIds found — return the registry as before.
+    return registryChannels;
   }
 
+  /** PERF: TTL cache + in-flight dedup around the expensive Graph channel
+   *  enumeration. Mirrors DiscordBridge.listChannels: a fresh hit returns the
+   *  cached array instantly; concurrent callers share one in-flight fetch. */
+  private async listGraphChannelsCached(): Promise<NormalizedChannel[]> {
+    if (this.graphChannelCache && Date.now() < this.graphChannelCache.expiresAt) {
+      return this.graphChannelCache.data;
+    }
+    if (this.graphChannelFetchInFlight) {
+      return this.graphChannelFetchInFlight;
+    }
+    this.graphChannelFetchInFlight = this.enumerateGraphChannels();
+    try {
+      return await this.graphChannelFetchInFlight;
+    } finally {
+      this.graphChannelFetchInFlight = null;
+    }
+  }
+
+  /** Resolve the set of AAD group ids (Graph team-ids) for this connection.
+   *  Primary source: teamsKnownTeamIds (populated from install events and
+   *  across adapter recycles as new activities arrive). Cold-start fallback:
+   *  a one-shot Redis SCAN of the adapter's channelContext cache to recover
+   *  teamIds written by cacheUserContext on prior runs.
+   *
+   *  Trade-offs:
+   *    • SCAN (not KEYS) — non-blocking, yields key batches, safe for prod Redis.
+   *    • Retry-until-success: the guard is set ONLY after ≥1 teamId is found, so
+   *      calls that race adapter initialisation retry on the next call.
+   *    • No cross-connection back-fill — teamIds are added only to this
+   *      connection's set; the Redis cache is shared across connections and
+   *      blindly claiming another's teams would misroute Graph credentials. */
+  private async resolveTeamIds(): Promise<Set<string>> {
+    const teamIds = new Set(teamsKnownTeamIds.get(this.connectionId) ?? []);
+    if (teamIds.size === 0 && !teamsColdStartScanned.has(this.connectionId)) {
+      const chatState = (this.adapter as any).chat?.getState?.();
+      if (chatState) {
+        try {
+          const redisClient = (chatState as any).client as {
+            scanIterator?: (opts: { MATCH: string; COUNT: number }) => AsyncIterable<string[]>;
+          };
+          if (typeof redisClient?.scanIterator === "function") {
+            // scanIterator yields key BATCHES (string[]), not individual strings.
+            for await (const keyBatch of redisClient.scanIterator({
+              MATCH: "chat-sdk:cache:teams:channelContext:*",
+              COUNT: 100,
+            })) {
+              for (const key of keyBatch) {
+                try {
+                  const raw: unknown = await chatState.get(key.replace("chat-sdk:cache:", ""));
+                  const ctx: unknown = typeof raw === "string" ? JSON.parse(raw) : raw;
+                  if (ctx && typeof ctx === "object" && "teamId" in ctx) {
+                    const tId = (ctx as { teamId: string }).teamId;
+                    // A Graph team-id is an AAD group GUID. Validate the shape
+                    // before it flows into `graph.call(...{ "team-id": tId })`:
+                    // the Redis keyspace is shared, so a poisoned channelContext
+                    // entry must not be able to inject an arbitrary value into a
+                    // Graph API path. Non-GUID entries are silently skipped.
+                    if (tId && TEAMS_AAD_GROUP_ID_RE.test(tId)) {
+                      teamIds.add(tId);
+                      let teamSet = teamsKnownTeamIds.get(this.connectionId);
+                      if (!teamSet) {
+                        teamSet = new Set();
+                        teamsKnownTeamIds.set(this.connectionId, teamSet);
+                      }
+                      teamSet.add(tId);
+                    }
+                  }
+                } catch {
+                  // malformed cache entry — skip
+                }
+              }
+            }
+          }
+        } catch {
+          // Redis scan failed (chat not yet initialized) — will retry next call
+        }
+      }
+      // Only lock out future scans once we actually found something; if scan
+      // yielded nothing (adapter not yet ready, empty Redis) we want to retry.
+      if (teamIds.size > 0) {
+        teamsColdStartScanned.add(this.connectionId);
+      }
+    }
+    return teamIds;
+  }
+
+  /** Enumerate channels for every known team via Microsoft Graph. The per-team
+   *  Graph calls are issued CONCURRENTLY (was sequential): teamIds is bounded by
+   *  how many teams the bot is installed in (a handful), so an unbounded
+   *  Promise.all stays well under Graph's per-app throttle. Result is cached on
+   *  a non-empty success only. On total failure, falls back to stale cache. */
+  private async enumerateGraphChannels(): Promise<NormalizedChannel[]> {
+    try {
+      const teamIds = await this.resolveTeamIds();
+      if (teamIds.size === 0) return this.graphChannelCache?.data ?? [];
+
+      const graph = (this.adapter as any).app?.graph;
+      if (!graph) return this.graphChannelCache?.data ?? [];
+
+      // Requires RSC ChannelSettings.Read.Group (no admin consent) or
+      // application Channel.ReadBasic.All (admin consent). See block comment.
+      const { teams } = await import("@microsoft/teams.graph-endpoints" as string);
+      const perTeam = await Promise.all(
+        [...teamIds].map((teamId) => this.listChannelsForTeam(graph, teams, teamId)),
+      );
+      const graphChannels = perTeam.flat();
+
+      // Cache a non-empty success only: a team discovered later (via webhook)
+      // must surface on the next call, not be masked by a cached empty result.
+      if (graphChannels.length > 0) {
+        this.graphChannelCache = {
+          data: graphChannels,
+          expiresAt: Date.now() + TeamsBridge.GRAPH_CHANNEL_CACHE_TTL_MS,
+        };
+      }
+      return graphChannels;
+    } catch (err) {
+      if (this.graphChannelCache) {
+        console.warn("TeamsBridge: listChannels failed, returning stale cache:", safeErrorMessage(err));
+        return this.graphChannelCache.data;
+      }
+      console.error("TeamsBridge: listChannels error (no cache):", safeErrorMessage(err));
+      return [];
+    }
+  }
+
+  /** Enumerate one team's channels and pre-populate the channelContext Redis
+   *  cache for each (Bug A: ensures per-channel message reads resolve to their
+   *  own messages, not the team root). Returns [] on failure so one bad team
+   *  never fails the whole concurrent enumeration. */
+  private async listChannelsForTeam(graph: any, teams: any, teamId: string): Promise<NormalizedChannel[]> {
+    try {
+      const resp = await graph.call(teams.channels.list, { "team-id": teamId });
+      const out: NormalizedChannel[] = [];
+      for (const ch of (resp?.value ?? [])) {
+        const channelId = ch.id as string;
+        out.push({
+          channel_id: channelId,
+          name: ch.displayName as string || channelId,
+          platform: "teams",
+          is_member: true,
+          member_count: null,
+          topic: (ch.membershipType as string) ?? null,
+          purpose: null,
+        });
+        // Pre-populate channelContext with the CORRECT {teamId, channelId} from
+        // the authoritative Graph channel-list so getGraphContext doesn't fall
+        // back to teams.getById(channelId) and collapse every channel under a
+        // team root to the same id (Bug A).
+        const chatState = (this.adapter as any).chat?.getState?.();
+        if (chatState) {
+          const ctx = JSON.stringify({ teamId, channelId });
+          chatState.set(`teams:channelContext:${channelId}`, ctx, 30 * 24 * 60 * 60 * 1000)
+            .catch(() => { /* non-fatal */ });
+        }
+      }
+      return out;
+    } catch (err) {
+      // safeErrorMessage extracts .message only (no stack/raw object) so an
+      // MSAL/Graph error can't carry a token into logs.
+      console.warn(`TeamsBridge: Graph channels.list failed for team ${teamId}:`, safeErrorMessage(err));
+      return [];
+    }
+  }
   async getChannel(id: string): Promise<NormalizedChannel> {
     const entry = teamsConversationRegistry.get(this.connectionId)?.get(id);
     if (entry) return teamsRecordToChannel(entry);
 
     try {
-      const info = await this.adapter.fetchChannelInfo(id);
+      // fetchChannelInfo internally calls decodeThreadId, which requires the
+      // encoded `teams:<b64conv>:<b64svc>` form — NOT the bare `19:…@thread`
+      // conversation id. Encode with a placeholder serviceUrl (the same one
+      // used by fetchPage for channel reads); fetchChannelInfo only uses the
+      // conversationId portion to resolve Graph context.
+      const encodedId = this.adapter.encodeThreadId({
+        conversationId: id,
+        serviceUrl: "https://smba.trafficmanager.net/teams/",
+      });
+      const info = await this.adapter.fetchChannelInfo(encodedId);
       return {
-        channel_id: info.id,
-        name: info.name || info.id,
+        channel_id: id,                    // preserve the raw channel id as key
+        name: info.name || id,
         platform: "teams",
         is_member: true,
         member_count: info.memberCount ?? null,
@@ -1351,12 +1675,22 @@ class TeamsBridge implements PlatformBridge {
     }
   }
 
+  /** M4: shared predicate — keeps getMessageCount and getMessages in sync. */
+  private isUserMessage(m: ChatSDKMessage<unknown>): boolean {
+    const raw = (m.raw ?? {}) as Record<string, unknown>;
+    const msgType = raw.messageType as string | undefined;
+    if (msgType && msgType !== "message") return false;  // system / event
+    if (raw.deletedDateTime) return false;               // deleted by sender
+    return true;
+  }
+
   async getMessageCount(channelId: string): Promise<number> {
     let count = 0;
     let cursor: string | undefined;
     while (count < TEAMS_MESSAGE_COUNT_CAP) {
       const page = await this.fetchPage(channelId, cursor, TEAMS_PAGE_SIZE);
-      count += page.messages.length;
+      // M4: apply the same user-message filter as getMessages so counts agree.
+      count += page.messages.filter((m) => this.isUserMessage(m)).length;
       if (!page.nextCursor || page.messages.length === 0) break;
       cursor = page.nextCursor;
     }
@@ -1367,17 +1701,48 @@ class TeamsBridge implements PlatformBridge {
     const fetchLimit = Math.max(1, Math.min(opts.limit || 100, TEAMS_MESSAGE_COUNT_CAP));
     const collected: ChatSDKMessage<unknown>[] = [];
     let cursor: string | undefined;
+
+    // Bug C fix: always use direction="backward" (newest-first) regardless of
+    // the caller's requested order. The adapter's "forward" path fetches ALL
+    // messages from the beginning and reverses them — O(channel-history) per
+    // call. The "backward" path issues a single $top=N Graph request (~1-2s).
+    // We collect in backward order, then flip to asc here if needed.
     while (collected.length < fetchLimit) {
       const remaining = fetchLimit - collected.length;
       const pageSize = Math.min(TEAMS_PAGE_SIZE, remaining);
-      const page = await this.fetchPage(channelId, cursor, pageSize);
+      const page = await this.fetchPage(channelId, cursor, pageSize, "backward");
       collected.push(...page.messages);
       if (!page.nextCursor || page.messages.length === 0) break;
       cursor = page.nextCursor;
     }
+
+    // Drop non-user Graph messages before normalizing (M4 predicate reused here).
+    const userMessages = collected.filter((m) => this.isUserMessage(m));
+
+    // H2: apply since/before timestamp window. The adapter doesn't push these
+    // into the Graph $filter clause (it would need cursor re-encoding); bridge-
+    // side filtering is consistent with the Slack approach and keeps the adapter
+    // boundary clean. Both opts are ISO strings; parse once and compare as ms.
+    const sinceMs = opts.since ? new Date(opts.since).getTime() : null;
+    const beforeMs = opts.before ? new Date(opts.before).getTime() : null;
+    const windowedMessages = (sinceMs !== null || beforeMs !== null)
+      ? userMessages.filter((m) => {
+          const sent = m.metadata?.dateSent instanceof Date
+            ? m.metadata.dateSent.getTime()
+            : new Date(m.metadata?.dateSent || 0).getTime();
+          if (sinceMs !== null && sent < sinceMs) return false;
+          if (beforeMs !== null && sent > beforeMs) return false;
+          return true;
+        })
+      : userMessages;
+
     const entry = teamsConversationRegistry.get(this.connectionId)?.get(channelId);
     const channelName = entry?.name || channelId;
-    return collected.map((m) => this.normalizeMessage(m, channelId, channelName));
+    const normalized = windowedMessages.map((m) => this.normalizeMessage(m, channelId, channelName));
+
+    // Backward fetch returns newest-first; flip to oldest-first for asc callers.
+    if (opts.order === "asc") normalized.reverse();
+    return normalized;
   }
 
   async getThreadMessages(channelId: string, threadId: string): Promise<NormalizedMessage[]> {
@@ -1440,14 +1805,33 @@ class TeamsBridge implements PlatformBridge {
     channelId: string,
     cursor: string | undefined,
     limit: number,
+    direction: "forward" | "backward" = "backward",
   ): Promise<{ messages: ChatSDKMessage<unknown>[]; nextCursor?: string }> {
     const entry = teamsConversationRegistry.get(this.connectionId)?.get(channelId);
-    const isTeamChannel = entry?.conversationType === "channel";
+    // Treat as a team channel when the registry says so OR when the id has the
+    // `19:…@thread.tacv2` channel shape (the registry may be unwarmed after a
+    // bot restart, but the channel id alone is enough to read via Graph).
+    const isTeamChannel = entry?.conversationType === "channel"
+      || (channelId.startsWith("19:") && channelId.includes("@thread"));
 
+    // Graph channel reads (fetchChannelMessages) resolve their real target via
+    // getChannelContext(conversationId) and never use serviceUrl — the adapter
+    // only decodes it from the thread id and ignores it. So channel reads must
+    // NOT require a cached serviceUrl; supply a placeholder so encodeThreadId
+    // produces a well-formed `teams:<conv>:<svcUrl>` id. serviceUrl is only
+    // genuinely needed by the Bot-Connector path (DM/group-chat reads + replies).
     if (isTeamChannel) {
-      return this.adapter.fetchChannelMessages(channelId, { cursor, limit });
+      // Graph's /teams/{id}/channels/{id}/messages endpoint does not support
+      // $select (returns 400). Payload optimisation via field projection is not
+      // available on this endpoint; use the adapter's typed method unchanged.
+      const encodedChannelThreadId = this.adapter.encodeThreadId({
+        conversationId: channelId,
+        serviceUrl: entry?.serviceUrl || "https://smba.trafficmanager.net/teams/",
+      });
+      return this.adapter.fetchChannelMessages(encodedChannelThreadId, { cursor, limit, direction });
     }
 
+    // DM / group-chat reads go through the Bot Connector, which needs serviceUrl.
     if (!entry?.serviceUrl) {
       throw Object.assign(
         new Error("Teams serviceUrl unknown — bot must observe an activity in this conversation first"),
@@ -1471,8 +1855,28 @@ class TeamsBridge implements PlatformBridge {
       ? dateSent.toISOString()
       : new Date(dateSent || Date.now()).toISOString();
 
+    // Bug B fix: the adapter's extractTextFromGraphMessage strips HTML tags
+    // char-by-char but does NOT decode HTML entities. Teams messages arrive
+    // as HTML (body.contentType = "html") so @mentions appear as
+    // `<at>Beever Atlas</at>&nbsp;hello` → after tag-strip: `Beever Atlas&nbsp;hello`.
+    // Decode the common HTML entities that appear in Teams messages so the UI
+    // shows clean plain text. &nbsp; → space; standard XML entities handled too.
+    const rawText = m.text || "";
+    // M3: &amp; must run LAST so double-encoded sequences like &amp;lt; stay
+    // as &lt; rather than collapsing all the way to <.
+    const content = rawText
+      .replace(/&nbsp;/g, " ")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x27;/g, "'")
+      .replace(/&#x2F;/g, "/")
+      .replace(/&amp;/g, "&")
+      .trim();
+
     return {
-      content: m.text || "",
+      content,
       author: m.author.userId,
       author_name: m.author.fullName || m.author.userName || m.author.userId,
       author_image: null,
@@ -2123,6 +2527,8 @@ function detectPlatformFromChannelId(channelId: string): string | null {
   if (/^[CDG][A-Z0-9]{8,}$/.test(channelId)) return "slack";
   // Discord: pure numeric snowflake IDs (e.g., 680671916943605760)
   if (/^\d{17,20}$/.test(channelId)) return "discord";
+  // Teams: Bot Framework / Graph channel ids (e.g., 19:abc@thread.tacv2)
+  if (channelId.startsWith("19:") && channelId.includes("@thread")) return "teams";
   return null;
 }
 
@@ -2153,14 +2559,14 @@ async function handleListChannels(
             const channels = await bridge.listChannels();
             allChannels.push(...channels);
           } catch (err) {
-            console.error(`Bridge: listChannels error for ${p} (${connectionId}):`, err);
+            console.error(`Bridge: listChannels error for ${p} (${connectionId}):`, safeErrorMessage(err));
           }
         }
       }
       jsonResponse(res, 200, { channels: allChannels });
     }
   } catch (err) {
-    console.error("Bridge: listChannels error:", err);
+    console.error("Bridge: listChannels error:", safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2192,7 +2598,7 @@ async function handleGetChannel(
     const channel = await bridge.getChannel(channelId);
     jsonResponse(res, 200, channel);
   } catch (err) {
-    console.error("Bridge: getChannel error:", err);
+    console.error("Bridge: getChannel error:", safeErrorMessage(err));
     jsonResponse(res, 404, { error: `Channel ${channelId} not found`, code: "NOT_FOUND" });
   }
 }
@@ -2229,7 +2635,7 @@ async function handleGetMessages(
     const messages = await bridge.getMessages(channelId, { limit, since, before, order });
     jsonResponse(res, 200, { messages });
   } catch (err) {
-    console.error("Bridge: getMessages error:", err);
+    console.error("Bridge: getMessages error:", safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2261,7 +2667,7 @@ async function handleGetMessageCount(
     const count = await bridge.getMessageCount(channelId);
     jsonResponse(res, 200, { count });
   } catch (err) {
-    console.error("Bridge: getMessageCount error:", err);
+    console.error("Bridge: getMessageCount error:", safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2294,7 +2700,7 @@ async function handleGetThreadMessages(
     const messages = await bridge.getThreadMessages(channelId, threadId);
     jsonResponse(res, 200, { messages });
   } catch (err) {
-    console.error("Bridge: getThreadMessages error:", err);
+    console.error("Bridge: getThreadMessages error:", safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2379,7 +2785,7 @@ async function handleFileProxy(
     });
     res.end(buffer);
   } catch (err) {
-    console.error("Bridge: fileProxy error:", err);
+    console.error("Bridge: fileProxy error:", safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2428,7 +2834,7 @@ async function handleRegisterAdapter(
   } catch (err) {
     // CodeQL js/stack-trace-exposure (alert #60): static prose, never derived
     // from `err`. Operators see the full error in the console.error line above.
-    console.error("Bridge: registerAdapter error:", err);
+    console.error("Bridge: registerAdapter error:", safeErrorMessage(err));
     jsonResponse(res, 500, { status: "error", message: "adapter registration failed" });
   }
 }
@@ -2450,7 +2856,7 @@ async function handleUnregisterAdapter(
   } catch (err) {
     // CodeQL js/stack-trace-exposure (alert #60): static prose, never derived
     // from `err`. Operators see the full error in the console.error line above.
-    console.error("Bridge: unregisterAdapter error:", err);
+    console.error("Bridge: unregisterAdapter error:", safeErrorMessage(err));
     jsonResponse(res, 500, { status: "error", message: "adapter unregistration failed" });
   }
 }
@@ -2550,7 +2956,7 @@ async function handleValidateAdapter(
     // arguments so user-tainted `platform` cannot influence format specifiers.
     // CodeQL js/stack-trace-exposure (alert #60): static prose, never derived
     // from `err`. Operators see the full error in the console.error line above.
-    console.error("Bridge: validateAdapter(%s) error:", platform, err);
+    console.error("Bridge: validateAdapter(%s) error:", platform, safeErrorMessage(err));
     jsonResponse(res, 200, { valid: false, error: "validation failed" });
   }
 }
@@ -2575,10 +2981,10 @@ async function handleConnectionRoute(
     const classified = classifyPlatformError(err);
     // Expected "not found" errors during multi-workspace probing — log briefly, not full stack
     if (classified.status === 404) {
-      console.warn(`Bridge: connection route (${connectionId}): ${(err as any)?.data?.error || err}`);
+      console.warn(`Bridge: connection route (${connectionId}): ${safeErrorMessage((err as any)?.data?.error ?? err)}`);
     } else {
       // CodeQL js/tainted-format-string (alert #23).
-      console.error("Bridge: connection route error (%s):", connectionId, err);
+      console.error("Bridge: connection route error (%s):", connectionId, safeErrorMessage(err));
     }
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2600,7 +3006,7 @@ async function handleConnectionChannels(
     jsonResponse(res, 200, { channels });
   } catch (err) {
     // CodeQL js/tainted-format-string (alert #24).
-    console.error("Bridge: listChannels error (connection %s):", connectionId, err);
+    console.error("Bridge: listChannels error (connection %s):", connectionId, safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2630,13 +3036,13 @@ async function handlePlatformChannelsAggregated(
         }
       } catch (err) {
         // CodeQL js/tainted-format-string (alert #25).
-        console.error("Bridge: listChannels error for %s:%s:", platform, connectionId, err);
+        console.error("Bridge: listChannels error for %s:%s:", platform, connectionId, safeErrorMessage(err));
       }
     }
     jsonResponse(res, 200, { channels: allChannels });
   } catch (err) {
     // CodeQL js/tainted-format-string (alert #26).
-    console.error("Bridge: aggregated listChannels error for %s:", platform, err);
+    console.error("Bridge: aggregated listChannels error for %s:", platform, safeErrorMessage(err));
     const classified = classifyPlatformError(err);
     jsonResponse(res, classified.status, { error: messageForCode(classified.code), code: classified.code });
   }
@@ -2730,7 +3136,10 @@ export function registerBridgeRoutes(
     );
     if (req.method === "GET" && connThreadMatch) {
       await handleConnectionRoute(req, res, chatManager, connThreadMatch[1], async (bridge) => {
-        const messages = await bridge.getThreadMessages(connThreadMatch[2], connThreadMatch[3]);
+        const messages = await bridge.getThreadMessages(
+          decodeChannelSegment(connThreadMatch[2]),
+          decodeChannelSegment(connThreadMatch[3]),
+        );
         jsonResponse(res, 200, { messages });
       });
       return true;
@@ -2740,7 +3149,7 @@ export function registerBridgeRoutes(
     const connCountMatch = url.match(/^\/bridge\/connections\/([^/]+)\/channels\/([^/]+)\/count$/);
     if (req.method === "GET" && connCountMatch) {
       await handleConnectionRoute(req, res, chatManager, connCountMatch[1], async (bridge) => {
-        const count = await bridge.getMessageCount(connCountMatch[2]);
+        const count = await bridge.getMessageCount(decodeChannelSegment(connCountMatch[2]));
         jsonResponse(res, 200, { count });
       });
       return true;
@@ -2755,7 +3164,7 @@ export function registerBridgeRoutes(
         const since = query.get("since") ?? undefined;
         const before = query.get("before") ?? undefined;
         const order = query.get("order") ?? "desc";
-        const messages = await bridge.getMessages(connMessagesMatch[2], { limit, since, before, order });
+        const messages = await bridge.getMessages(decodeChannelSegment(connMessagesMatch[2]), { limit, since, before, order });
         jsonResponse(res, 200, { messages });
       });
       return true;
@@ -2765,7 +3174,7 @@ export function registerBridgeRoutes(
     const connChannelMatch = url.match(/^\/bridge\/connections\/([^/]+)\/channels\/([^/]+)$/);
     if (req.method === "GET" && connChannelMatch) {
       await handleConnectionRoute(req, res, chatManager, connChannelMatch[1], async (bridge) => {
-        const channel = await bridge.getChannel(connChannelMatch[2]);
+        const channel = await bridge.getChannel(decodeChannelSegment(connChannelMatch[2]));
         jsonResponse(res, 200, channel);
       });
       return true;
@@ -2785,21 +3194,21 @@ export function registerBridgeRoutes(
       /^\/bridge\/platforms\/([^/]+)\/channels\/([^/]+)\/threads\/([^/]+)\/messages/,
     );
     if (req.method === "GET" && platformThreadMatch) {
-      await handleGetThreadMessages(req, res, chatManager, platformThreadMatch[2], platformThreadMatch[3], platformThreadMatch[1]);
+      await handleGetThreadMessages(req, res, chatManager, decodeChannelSegment(platformThreadMatch[2]), decodeChannelSegment(platformThreadMatch[3]), platformThreadMatch[1]);
       return true;
     }
 
     // GET /bridge/platforms/:platform/channels/:id/messages
     const platformMessagesMatch = url.match(/^\/bridge\/platforms\/([^/]+)\/channels\/([^/]+)\/messages/);
     if (req.method === "GET" && platformMessagesMatch) {
-      await handleGetMessages(req, res, chatManager, platformMessagesMatch[2], platformMessagesMatch[1]);
+      await handleGetMessages(req, res, chatManager, decodeChannelSegment(platformMessagesMatch[2]), platformMessagesMatch[1]);
       return true;
     }
 
     // GET /bridge/platforms/:platform/channels/:id
     const platformChannelMatch = url.match(/^\/bridge\/platforms\/([^/]+)\/channels\/([^/]+)$/);
     if (req.method === "GET" && platformChannelMatch) {
-      await handleGetChannel(req, res, chatManager, platformChannelMatch[2], platformChannelMatch[1]);
+      await handleGetChannel(req, res, chatManager, decodeChannelSegment(platformChannelMatch[2]), platformChannelMatch[1]);
       return true;
     }
 
@@ -2828,28 +3237,28 @@ export function registerBridgeRoutes(
       /^\/bridge\/channels\/([^/]+)\/threads\/([^/]+)\/messages/,
     );
     if (req.method === "GET" && threadMatch) {
-      await handleGetThreadMessages(req, res, chatManager, threadMatch[1], threadMatch[2]);
+      await handleGetThreadMessages(req, res, chatManager, decodeChannelSegment(threadMatch[1]), decodeChannelSegment(threadMatch[2]));
       return true;
     }
 
     // GET /bridge/channels/:id/count
     const countMatch = url.match(/^\/bridge\/channels\/([^/]+)\/count$/);
     if (req.method === "GET" && countMatch) {
-      await handleGetMessageCount(req, res, chatManager, countMatch[1]);
+      await handleGetMessageCount(req, res, chatManager, decodeChannelSegment(countMatch[1]));
       return true;
     }
 
     // GET /bridge/channels/:id/messages
     const messagesMatch = url.match(/^\/bridge\/channels\/([^/]+)\/messages/);
     if (req.method === "GET" && messagesMatch) {
-      await handleGetMessages(req, res, chatManager, messagesMatch[1]);
+      await handleGetMessages(req, res, chatManager, decodeChannelSegment(messagesMatch[1]));
       return true;
     }
 
     // GET /bridge/channels/:id
     const channelMatch = url.match(/^\/bridge\/channels\/([^/]+)$/);
     if (req.method === "GET" && channelMatch) {
-      await handleGetChannel(req, res, chatManager, channelMatch[1]);
+      await handleGetChannel(req, res, chatManager, decodeChannelSegment(channelMatch[1]));
       return true;
     }
 
