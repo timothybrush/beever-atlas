@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { X, ArrowLeft, ArrowRight, CheckCircle2, Loader2, AlertCircle, ExternalLink, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChannelSelector } from "./ChannelSelector";
@@ -47,13 +47,27 @@ const DISCORD_INSTRUCTIONS = [
 ];
 
 const TEAMS_INSTRUCTIONS = [
-  { text: "Go to", link: "https://portal.azure.com/#create/Microsoft.AzureBot", linkText: "Azure Portal" },
-  { text: "Create a new Azure Bot resource — choose SingleTenant or MultiTenant" },
-  { text: "Under Configuration, copy the Microsoft App ID" },
-  { text: "Click Manage Password → New client secret and copy the value" },
-  { text: "Note your Azure AD Tenant ID from the Azure Active Directory overview (required for SingleTenant)" },
-  { text: "Under Channels, add the Microsoft Teams channel and save" },
-  { text: "Set the messaging endpoint to your bot's webhook URL" },
+  {
+    text: "Create an Azure Bot resource",
+    link: "https://portal.azure.com/#create/Microsoft.AzureBot",
+    linkText: "in Azure Portal",
+    details: ["App type: SingleTenant (recommended) or MultiTenant"],
+  },
+  {
+    text: "Expose this bridge over HTTPS, then set the Bot's Messaging endpoint to your URL + /api/teams",
+    details: [
+      "Local dev: ngrok http 3001",
+      "https://<your-host>/api/teams",
+    ],
+  },
+  { text: "Copy the Microsoft App ID from Bot → Configuration" },
+  { text: "On the linked App Registration → Manage Password, create a client secret and copy the VALUE (shown once)" },
+  { text: "Copy the Tenant ID from Azure Active Directory → Overview" },
+  { text: "On the Bot resource → Channels, add the Microsoft Teams channel" },
+  {
+    text: "On API permissions, add Microsoft Graph application permission, then Grant admin consent — a Global Admin must do this",
+    details: ["Channel.ReadBasic.All"],
+  },
 ];
 
 const TELEGRAM_INSTRUCTIONS = [
@@ -70,7 +84,43 @@ const MATTERMOST_INSTRUCTIONS = [
   { text: "Add the bot user to any channels where it should read from. The bot will only receive events from channels it is a member of" },
 ];
 
-const CREDENTIAL_FIELDS: Record<Platform, { key: string; label: string; placeholder: string; type?: string; optional?: boolean }[]> = {
+interface CredentialField {
+  key: string;
+  label: string;
+  placeholder: string;
+  type?: string;
+  optional?: boolean;
+  /** When present, render as a `<select>` with these options instead of a
+   *  free-text input. Eliminates the historical typo class on `app_type`
+   *  (the Teams adapter rejects anything other than the exact strings
+   *  "SingleTenant" or "MultiTenant" — a leading space or lowercase letter
+   *  silently silently produces a MSAL `missing_tenant_id_error`). */
+  enum?: string[];
+  /** Pre-fills the credential when the user first reaches the credentials
+   *  step. Only honoured when `enum` is also set — keeps tokens/secrets
+   *  empty by default. */
+  default?: string;
+  /** Optional helper text rendered under the input. */
+  hint?: string;
+  /** Synchronous client-side validator. Return null when OK, or a short
+   *  error string. Empty values are NOT passed in — the required-field
+   *  gate is handled separately by `credentialsFilled`. */
+  validate?: (value: string) => string | null;
+}
+
+/** AAD GUIDs are 8-4-4-4-12 hex. Without this check users routinely paste
+ *  a display name like "Teams" into the App ID field; the wizard's
+ *  validate step (which doesn't actually mint a Graph token) accepts it,
+ *  then the bot fails later with AADSTS700016. */
+const AAD_GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function validateAadGuid(label: string) {
+  return (value: string): string | null =>
+    AAD_GUID_RE.test(value.trim())
+      ? null
+      : `${label} must look like xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`;
+}
+
+const CREDENTIAL_FIELDS: Record<Platform, CredentialField[]> = {
   slack: [
     { key: "bot_token", label: "Bot Token", placeholder: "xoxb-...", type: "password" },
     { key: "signing_secret", label: "Signing Secret", placeholder: "Your app's signing secret", type: "password" },
@@ -82,10 +132,28 @@ const CREDENTIAL_FIELDS: Record<Platform, { key: string; label: string; placehol
     { key: "mention_role_ids", label: "Mention Role IDs (optional)", placeholder: "Comma-separated role IDs, e.g. 1234567890,9876543210", optional: true },
   ],
   teams: [
-    { key: "app_id", label: "Microsoft App ID", placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
+    {
+      key: "app_id",
+      label: "Microsoft App ID",
+      placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      validate: validateAadGuid("Microsoft App ID"),
+    },
     { key: "app_password", label: "App Password (Client Secret)", placeholder: "Your Azure app client secret", type: "password" },
-    { key: "app_tenant_id", label: "Azure AD Tenant ID", placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
-    { key: "app_type", label: "App Type", placeholder: "MultiTenant" },
+    {
+      key: "app_tenant_id",
+      label: "Azure AD Tenant ID",
+      placeholder: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      hint: "Required. The adapter cannot fetch message history without this, and SingleTenant bots reject the client_credentials token without it.",
+      validate: validateAadGuid("Azure AD Tenant ID"),
+    },
+    {
+      key: "app_type",
+      label: "App Type",
+      placeholder: "SingleTenant",
+      enum: ["SingleTenant", "MultiTenant"],
+      default: "SingleTenant",
+      hint: "Both modes are supported. SingleTenant is recommended for org-internal bots and is the safer default. MultiTenant is for bots installed into multiple tenants (ISV / public scenarios).",
+    },
   ],
   telegram: [
     { key: "bot_token", label: "Bot Token", placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11", type: "password" },
@@ -119,9 +187,11 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
   const instructions = INSTRUCTIONS_MAP[platform];
   const fields = CREDENTIAL_FIELDS[platform];
 
-  // Telegram and Teams bots are event-driven — they receive messages via webhook,
-  // so the bridge has no channel listing API for them.
-  const isWebhookOnly = platform === "telegram" || platform === "teams";
+  // Telegram has no channel listing API and stays webhook-only. Teams used
+  // to be in this bucket too, but PR #206 added Graph-based channel
+  // enumeration (TeamsBridge.listChannels → GET /teams/{id}/channels), so
+  // the Channels step now renders the real channel list for Teams.
+  const isWebhookOnly = platform === "telegram";
 
   function handleCredentialChange(key: string, value: string) {
     setCredentials((prev) => ({ ...prev, [key]: value }));
@@ -157,6 +227,12 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
   }
 
   const credentialsFilled = fields.every((f) => f.optional || (credentials[f.key] ?? "").trim().length > 0);
+  // Disable Validate when any FILLED field fails its own validator. Empty
+  // fields are handled by `credentialsFilled`; we don't double-report.
+  const credentialsValid = fields.every((f) => {
+    const v = (credentials[f.key] ?? "").trim();
+    return !v || !f.validate || f.validate(v) === null;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -270,7 +346,7 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
               <button
                 type="button"
                 onClick={handleValidate}
-                disabled={!credentialsFilled}
+                disabled={!credentialsFilled || !credentialsValid}
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
               >
                 Validate
@@ -443,10 +519,28 @@ function StepCredentials({
   values,
   onChange,
 }: {
-  fields: { key: string; label: string; placeholder: string; type?: string }[];
+  fields: CredentialField[];
   values: Record<string, string>;
   onChange: (key: string, value: string) => void;
 }) {
+  // Auto-fill defaults the first time the user reaches this step so a
+  // typo-prone enum like Teams `app_type` lands on the recommended value
+  // instead of an empty string.
+  //
+  // `fields` is `CREDENTIAL_FIELDS[platform]` — a module-level constant —
+  // so its reference never changes across renders and this effect fires
+  // exactly once per mount. `values` and `onChange` are intentionally
+  // omitted from the deps: re-running on every keystroke would clobber
+  // the user's typing, and the one-shot fill is all we want.
+  useEffect(() => {
+    for (const field of fields) {
+      if (field.default != null && (values[field.key] ?? "") === "") {
+        onChange(field.key, field.default);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fields]);
+
   return (
     <div className="space-y-4">
       <div>
@@ -456,15 +550,38 @@ function StepCredentials({
       {fields.map((field) => (
         <div key={field.key}>
           <label className="block text-xs font-medium text-foreground mb-1.5">{field.label}</label>
-          <input
-            type={field.type ?? "text"}
-            value={values[field.key] ?? ""}
-            onChange={(e) => onChange(field.key, e.target.value)}
-            placeholder={field.placeholder}
-            className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 font-mono"
-            autoComplete="off"
-            spellCheck={false}
-          />
+          {field.enum ? (
+            <select
+              value={values[field.key] ?? field.default ?? ""}
+              onChange={(e) => onChange(field.key, e.target.value)}
+              className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 font-mono"
+            >
+              {field.enum.map((opt) => (
+                <option key={opt} value={opt}>{opt}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={field.type ?? "text"}
+              value={values[field.key] ?? ""}
+              onChange={(e) => onChange(field.key, e.target.value)}
+              placeholder={field.placeholder}
+              className="w-full h-9 px-3 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 font-mono"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          )}
+          {(() => {
+            const trimmed = (values[field.key] ?? "").trim();
+            const err = trimmed && field.validate ? field.validate(trimmed) : null;
+            if (err) {
+              return <p className="text-[11px] text-rose-500 mt-1 leading-snug">{err}</p>;
+            }
+            if (field.hint) {
+              return <p className="text-[11px] text-muted-foreground/85 mt-1 leading-snug">{field.hint}</p>;
+            }
+            return null;
+          })()}
         </div>
       ))}
     </div>
@@ -529,22 +646,56 @@ function StepChannels({
 }
 
 function StepWebhookMode({ platform }: { platform: Platform }) {
-  const label = platform === "telegram" ? "Telegram" : "Microsoft Teams";
+  if (platform === "teams") return <TeamsWebhookMode />;
   return (
     <div className="space-y-4">
       <div>
         <h3 className="text-sm font-semibold text-foreground mb-1">Webhook-driven ingestion</h3>
         <p className="text-xs text-muted-foreground">
-          {label} bots receive messages via webhook and have no channel listing API. Channels appear
+          Telegram bots receive messages via webhook and have no channel listing API. Channels appear
           automatically once the bot receives its first message from a chat it&apos;s been added to.
         </p>
       </div>
       <div className="flex items-start gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2.5">
         <Zap className="w-4 h-4 text-primary shrink-0 mt-0.5" />
         <p className="text-xs text-muted-foreground">
-          {platform === "telegram"
-            ? "Make sure the bot is added to your group and, for privacy-enabled bots, granted admin permission so it can read messages."
-            : "Make sure the Teams channel is configured in Azure Bot Service and the messaging endpoint points to this bridge."}
+          Make sure the bot is added to your group and, for privacy-enabled bots, granted admin permission so it can read messages.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Teams' post-validation step. Endpoint + Graph consent are covered in
+ *  the Setup step list (they happen in Azure before credentials), so this
+ *  panel is just the one remaining action that has to happen in TEAMS
+ *  itself — uploading the app package so the bot appears in channels. */
+function TeamsWebhookMode() {
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-foreground mb-1">One step left in Teams</h3>
+        <p className="text-xs text-muted-foreground">
+          Credentials validated. To make the bot appear in channels, a Teams admin uploads the app package:
+        </p>
+      </div>
+
+      <div className="rounded-lg border border-border px-3 py-2.5">
+        <p className="text-[11px] text-muted-foreground leading-snug">
+          Teams Admin Center → Manage apps → Upload custom app:
+        </p>
+        <code className="block mt-1 text-[11px] bg-muted px-2 py-1 rounded font-mono break-all">
+          bot/teams-app/beever-atlas-teams.zip
+        </code>
+        <p className="text-[11px] text-muted-foreground/85 mt-1.5 leading-snug">
+          Once uploaded, add the app to the team(s) and channels you want Beever Atlas to read.
+        </p>
+      </div>
+
+      <div className="flex items-start gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2.5">
+        <Zap className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+        <p className="text-xs text-muted-foreground">
+          Channels appear automatically — no @mention required.
         </p>
       </div>
     </div>
