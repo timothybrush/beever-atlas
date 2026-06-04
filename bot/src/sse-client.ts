@@ -246,23 +246,36 @@ export async function fetchSSEWithRetry(
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (options.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+    let response: Response;
     try {
-      const response = await fetch(url, { ...init, signal: options.signal });
-      if (response.status >= 500) {
-        lastErr = new Error(`Backend returned ${response.status}`);
-        await sleep(backoffDelayMs(attempt));
-        continue;
-      }
-      if (!response.ok) {
-        throw new Error(`Backend returned ${response.status}: ${await response.text()}`);
-      }
-      return await consumeSSEStream(response, options);
+      response = await fetch(url, { ...init, signal: options.signal });
     } catch (err) {
+      // Network / transport error — retryable.
       if ((err as { name?: string })?.name === "AbortError") throw err;
       lastErr = err;
       if (attempt === maxAttempts - 1) break;
       await sleep(backoffDelayMs(attempt));
+      continue;
     }
+
+    // 5xx — server-side, retryable with backoff.
+    if (response.status >= 500) {
+      lastErr = new Error(`Backend returned ${response.status}`);
+      if (attempt === maxAttempts - 1) break;
+      await sleep(backoffDelayMs(attempt));
+      continue;
+    }
+
+    // 4xx — client error (bad request / auth / not found). Retrying won't help
+    // and only burns the timeout budget, so surface it immediately.
+    if (!response.ok) {
+      throw new Error(`Backend returned ${response.status}: ${await response.text()}`);
+    }
+
+    // Success: stream-consumption failures (e.g. an SSE `error` event) are
+    // terminal too — they reflect an agent error, not a transient blip.
+    return await consumeSSEStream(response, options);
   }
   throw lastErr ?? new Error("fetchSSEWithRetry: exhausted retries");
 }

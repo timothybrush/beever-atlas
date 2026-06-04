@@ -150,7 +150,7 @@ describe("backoffDelayMs", () => {
   });
 });
 
-describe("fetchSSEWithRetry", () => {
+describe("consumeSSEStream — enrichment", () => {
   it("propagates the empty-retrieval and freshness metadata", async () => {
     const body = [
       "event: response_delta",

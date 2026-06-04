@@ -44,8 +44,9 @@ function registerHandlers(bot: Chat): void {
   // Handler: user @mentions the bot in a not-yet-subscribed thread.
   bot.onNewMention(async (thread, message) => {
     console.log(`[@mention] ${message.text} (from ${thread.id})`);
-    // Never answer our own message (defense-in-depth; the SDK shouldn't deliver it).
-    if (message.author?.isMe === true) return;
+    // Never answer our own message or another bot — the latter prevents
+    // bot-to-bot @mention loops (e.g. a workflow bot pinging Beever).
+    if (message.author?.isMe === true || message.author?.isBot === true) return;
     await thread.subscribe();
 
     const question = stripMention(message.text || "");
@@ -62,6 +63,11 @@ function registerHandlers(bot: Chat): void {
   // we gate before answering — see trigger.ts for the rules.
   bot.onSubscribedMessage(async (thread, message) => {
     console.log(`[subscribed] ${message.text} (in ${thread.id})`);
+
+    // Always skip self/other-bots, even when the redesign flag is off — this is
+    // the minimum guard that prevents the reply-storm, so the legacy fallback
+    // path stays safe to roll back to.
+    if (message.author?.isMe === true || message.author?.isBot === true) return;
 
     const question = stripMention(message.text || "");
     if (!question.trim()) return;
@@ -91,7 +97,7 @@ function registerHandlers(bot: Chat): void {
  * errs toward answering, never toward going silent.
  */
 async function decideSubscribedThreadAction(
-  thread: { getParticipants(): Promise<Array<{ isMe: boolean }>> },
+  thread: { getParticipants(): Promise<Array<{ isMe: boolean; isBot?: boolean | "unknown" }>> },
   message: { isMention?: boolean; author?: { isMe?: boolean; isBot?: boolean | "unknown" } },
 ): Promise<"answer" | "skip" | "unsubscribe"> {
   const isMe = message.author?.isMe === true;
@@ -105,7 +111,9 @@ async function decideSubscribedThreadAction(
   let humanCount: number | undefined;
   try {
     const participants = await thread.getParticipants();
-    humanCount = participants.filter((p) => p.isMe !== true).length;
+    // Count only humans — exclude self and other bots so a single human + a
+    // helper bot doesn't trip the multi-human "go quiet" threshold.
+    humanCount = participants.filter((p) => p.isMe !== true && p.isBot !== true).length;
   } catch (err) {
     console.error("getParticipants failed; defaulting to answer:", safeErrorMessage(err));
     humanCount = undefined;
@@ -152,7 +160,9 @@ function backendApiKey(): string {
 }
 
 async function askBackend(channelId: string, question: string): Promise<AskResult> {
-  const url = `${BACKEND_URL}/api/channels/${channelId}/ask`;
+  // Encode the channel id so a value with slashes/`..` can't escape the route
+  // path and reach an unintended backend endpoint.
+  const url = `${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/ask`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const apiKey = backendApiKey();
   if (apiKey) {

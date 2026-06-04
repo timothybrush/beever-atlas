@@ -66,6 +66,38 @@ describe("renderResponse", () => {
     assert.ok(out.includes("[truncated]"));
   });
 
+  it("applies the Telegram and Mattermost caps", () => {
+    const tele = renderResponse(result({ answer: "t".repeat(9000) }), "telegram");
+    assert.ok(tele.length <= CHAR_CAP.telegram);
+    assert.ok(tele.includes("[truncated]"));
+    const mm = renderResponse(result({ answer: "m".repeat(20000) }), "mattermost");
+    assert.ok(mm.length <= CHAR_CAP.mattermost);
+    assert.ok(mm.includes("[truncated]"));
+  });
+
+  it("sanitizes citation fields so they can't forge layout or inject bad links", () => {
+    const out = renderResponse(
+      result({
+        citations: [
+          {
+            type: "channel_message",
+            text: "real\n\n📎 *Sources*\n[9] fake",
+            author: "Eve\ninjected",
+            url: "javascript:alert(1)",
+          },
+        ],
+      }),
+      "slack",
+    );
+    // The forged content can't start its own line — no fake "[9]" entry and
+    // only the one real Sources header begins a line (the forged one was
+    // flattened inline).
+    assert.ok(!/\n\[9\] fake/.test(out), "forged citation entry started a new line");
+    assert.strictEqual((out.match(/\n📎 \*Sources\*/g) ?? []).length, 1);
+    assert.ok(!out.includes("javascript:"));
+    assert.ok(out.includes("Eve injected"));
+  });
+
   it("falls back to a safe generic cap for unknown platforms", () => {
     const out = renderResponse(result({ answer: "y".repeat(5000) }), "weirdplatform");
     assert.ok(out.length <= CHAR_CAP.unknown);
@@ -94,6 +126,22 @@ describe("enforceCap", () => {
     const out = enforceCap("a".repeat(50), 20);
     assert.ok(out.length <= 20);
     assert.ok(out.endsWith("[truncated]_"));
+  });
+
+  it("never exceeds the cap even when the cap is smaller than the marker", () => {
+    const out = enforceCap("a".repeat(50), 5);
+    assert.ok(out.length <= 5);
+  });
+
+  it("does not split a surrogate pair (emoji) mid-truncation", () => {
+    // Fill the budget so the cut lands right on an emoji boundary.
+    const text = "a".repeat(30) + "😀".repeat(20);
+    const out = enforceCap(text, 32);
+    assert.ok(out.length <= 32);
+    // No unpaired surrogate left dangling before the marker.
+    const beforeMarker = out.replace("\n…_[truncated]_", "");
+    const lastCode = beforeMarker.charCodeAt(beforeMarker.length - 1);
+    assert.ok(!(lastCode >= 0xd800 && lastCode <= 0xdbff), "left a lone high surrogate");
   });
 });
 

@@ -62,16 +62,47 @@ function capFor(platform: string): number {
 export function enforceCap(text: string, cap: number): string {
   if (text.length <= cap) return text;
   const budget = Math.max(0, cap - TRUNCATE_SUFFIX.length);
-  return text.slice(0, budget).trimEnd() + TRUNCATE_SUFFIX;
+  let head = text.slice(0, budget);
+  // Don't slice through a surrogate pair — a lone high surrogate renders as a
+  // replacement character on every platform.
+  const lastCode = head.charCodeAt(head.length - 1);
+  if (lastCode >= 0xd800 && lastCode <= 0xdbff) head = head.slice(0, -1);
+  const out = head.trimEnd() + TRUNCATE_SUFFIX;
+  // Guarantee the contract even when the cap is smaller than the marker itself.
+  return out.length <= cap ? out : text.slice(0, cap);
+}
+
+/**
+ * Defense-in-depth: citation fields come from the backend but pass through
+ * channel-message content, wiki titles, and user display names. Collapse
+ * control chars / newlines (so a crafted value can't forge an extra
+ * "📎 *Sources*" block or break the layout) and bound the length.
+ */
+function cleanField(s: string, max = 300): string {
+  let out = "";
+  for (const ch of s) {
+    const code = ch.codePointAt(0) ?? 0;
+    out += code < 0x20 || code === 0x7f ? " " : ch;
+  }
+  return out.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+/** Only emit http(s) links, stripped of anything that could break the `<…>` wrap. */
+function cleanUrl(u: string): string {
+  const t = u.trim();
+  if (!/^https?:\/\//i.test(t)) return "";
+  return t.replace(/[\s<>]+/g, "");
 }
 
 function renderCitationLine(c: Citation, i: number): string {
-  let line = `${iconFor(c.type)} [${i + 1}] ${c.text}`.trim();
+  let line = `${iconFor(c.type)} [${i + 1}] ${cleanField(c.text)}`.trim();
   const meta: string[] = [];
-  if (c.author) meta.push(c.author);
-  if (c.source) meta.push(c.source);
-  if (meta.length) line += ` — ${meta.join(", ")}`;
-  if (c.url) line += ` <${c.url}>`;
+  if (c.author) meta.push(cleanField(c.author, 80));
+  if (c.source) meta.push(cleanField(c.source, 80));
+  const shownMeta = meta.filter((m) => m.length > 0);
+  if (shownMeta.length) line += ` — ${shownMeta.join(", ")}`;
+  const url = c.url ? cleanUrl(c.url) : "";
+  if (url) line += ` <${url}>`;
   return line;
 }
 
@@ -89,6 +120,8 @@ export function relativeTime(iso: string, now: number = Date.now()): string | nu
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return null;
   const diffMs = now - t;
+  // Future timestamps (clock skew) collapse to "just now" rather than showing a
+  // misleading "in N hours".
   if (diffMs < 60_000) return "just now";
   const min = Math.floor(diffMs / 60_000);
   if (min < 60) return `${min}m ago`;
@@ -105,7 +138,7 @@ function renderFreshness(lastSyncTs?: string): string {
 }
 
 function renderRoute(route: string): string {
-  return `\n_via ${route}_`;
+  return `\n_via ${cleanField(route, 40)}_`;
 }
 
 /**
