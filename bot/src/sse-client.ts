@@ -7,7 +7,7 @@
  * backoff for retryable failures at the fetch layer.
  */
 
-import type { AskResult } from "./index.js";
+import type { AskResult, Citation } from "./types.js";
 
 export interface SSEConsumeOptions {
   onDelta?: (delta: string) => void;
@@ -17,6 +17,89 @@ export interface SSEConsumeOptions {
 interface SSEEvent {
   type: string;
   data: Record<string, unknown>;
+}
+
+/** Mutable accumulator shared across the SSE event loop. */
+interface StreamState {
+  answer: string;
+  citations: Citation[];
+  route: string;
+  confidence: number;
+  costUsd: number;
+  lastSyncTs?: string;
+  /** Backend-provided empty-retrieval signal, if the metadata event carried it. */
+  backendEmpty?: boolean;
+}
+
+/** Phrases the QA agent emits when retrieval found nothing (see backend prompt). */
+const EMPTY_PATTERN =
+  /no indexed (memories|facts|wiki)|hasn'?t been synced|not been synced|could not find any indexed|don'?t have (any )?(indexed )?(memories|facts|wiki)|no record of/i;
+
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+
+function asRecord(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+}
+
+/**
+ * Normalize a `citations` event into {@link Citation}[], handling both the
+ * legacy flat `items` shape ({type, text, author, channel, permalink}) and the
+ * registry `sources` shape ({kind, title, excerpt, permalink, native{...}}).
+ */
+export function normalizeCitations(data: Record<string, unknown>): Citation[] {
+  const out: Citation[] = [];
+
+  const items = Array.isArray(data.items) ? data.items : [];
+  for (const raw of items) {
+    const it = asRecord(raw);
+    const text = asString(it.text) ?? asString(it.title) ?? asString(it.excerpt);
+    if (!text) continue;
+    out.push({
+      type: asString(it.type) ?? asString(it.kind) ?? "source",
+      text,
+      author: asString(it.author),
+      url: asString(it.permalink) ?? asString(it.url),
+      source: asString(it.channel) ?? asString(it.source),
+    });
+  }
+  if (out.length > 0) return out;
+
+  const sources = Array.isArray(data.sources) ? data.sources : [];
+  for (const raw of sources) {
+    const s = asRecord(raw);
+    const native = asRecord(s.native);
+    const text = asString(s.title) ?? asString(s.excerpt);
+    if (!text) continue;
+    out.push({
+      type: asString(s.kind) ?? "source",
+      text,
+      author: asString(native.author),
+      url: asString(s.permalink) ?? asString(native.permalink),
+      source: asString(native.channel_name) ?? asString(native.channel),
+    });
+  }
+  return out;
+}
+
+/** True when retrieval clearly found nothing: no citations AND empty-pattern text. */
+export function detectEmptyRetrieval(answer: string, citations: Citation[]): boolean {
+  if (citations.length > 0) return false;
+  return EMPTY_PATTERN.test(answer);
+}
+
+function finalizeResult(state: StreamState): AskResult {
+  const isEmpty = state.backendEmpty ?? detectEmptyRetrieval(state.answer, state.citations);
+  return {
+    answer: state.answer,
+    citations: state.citations,
+    route: state.route,
+    confidence: state.confidence,
+    costUsd: state.costUsd,
+    isEmpty,
+    lastSyncTs: state.lastSyncTs,
+  };
 }
 
 function parseSSEBlock(block: string): SSEEvent | null {
@@ -39,7 +122,7 @@ function parseSSEBlock(block: string): SSEEvent | null {
 
 function applyEvent(
   event: SSEEvent,
-  state: { answer: string; citations: AskResult["citations"]; route: string; confidence: number; costUsd: number },
+  state: StreamState,
   onDelta?: (delta: string) => void,
 ): void {
   switch (event.type) {
@@ -50,12 +133,19 @@ function applyEvent(
       break;
     }
     case "citations":
-      state.citations = (event.data.items as AskResult["citations"]) || [];
+      state.citations = normalizeCitations(event.data);
       break;
     case "metadata":
       state.route = (event.data.route as string) || "echo";
       state.confidence = (event.data.confidence as number) || 0;
       state.costUsd = (event.data.cost_usd as number) || 0;
+      // Optional, backward-compatible enrichments (absent on older backends).
+      if (typeof event.data.is_empty_retrieval === "boolean") {
+        state.backendEmpty = event.data.is_empty_retrieval;
+      }
+      if (typeof event.data.last_sync_ts === "string") {
+        state.lastSyncTs = event.data.last_sync_ts;
+      }
       break;
     case "error":
       throw new Error((event.data.message as string) || "Unknown backend error");
@@ -66,9 +156,9 @@ export async function consumeSSEStream(
   response: Response,
   options: SSEConsumeOptions = {},
 ): Promise<AskResult> {
-  const state = {
+  const state: StreamState = {
     answer: "",
-    citations: [] as AskResult["citations"],
+    citations: [],
     route: "echo",
     confidence: 0,
     costUsd: 0,
@@ -84,7 +174,7 @@ export async function consumeSSEStream(
       const event = parseSSEBlock(block);
       if (event) applyEvent(event, state, options.onDelta);
     }
-    return state;
+    return finalizeResult(state);
   }
 
   const reader = response.body.getReader();
@@ -124,7 +214,7 @@ export async function consumeSSEStream(
     if (options.signal) options.signal.removeEventListener("abort", onAbort);
   }
 
-  return state;
+  return finalizeResult(state);
 }
 
 /**

@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert";
-import { consumeSSEStream, backoffDelayMs, fetchSSEWithRetry } from "./sse-client.js";
+import {
+  consumeSSEStream,
+  backoffDelayMs,
+  fetchSSEWithRetry,
+  normalizeCitations,
+  detectEmptyRetrieval,
+} from "./sse-client.js";
 
 function mockResponse(body: string): Response {
   return new Response(body, {
@@ -141,6 +147,86 @@ describe("backoffDelayMs", () => {
     // Jitter is bounded by 250ms.
     const max = backoffDelayMs(0, () => 1);
     assert.ok(max > 500 && max <= 750);
+  });
+});
+
+describe("fetchSSEWithRetry", () => {
+  it("propagates the empty-retrieval and freshness metadata", async () => {
+    const body = [
+      "event: response_delta",
+      'data: {"delta": "This channel hasn\'t been synced yet."}',
+      "",
+      "event: citations",
+      'data: {"items": []}',
+      "",
+      "event: metadata",
+      'data: {"route": "qa_agent", "is_empty_retrieval": true, "last_sync_ts": "2026-06-01T00:00:00Z"}',
+      "",
+      "event: done",
+      "data: {}",
+      "",
+    ].join("\n");
+    const result = await consumeSSEStream(mockResponse(body));
+    assert.strictEqual(result.isEmpty, true);
+    assert.strictEqual(result.lastSyncTs, "2026-06-01T00:00:00Z");
+  });
+
+  it("normalizes registry-shape citations with provenance", async () => {
+    const body = [
+      "event: citations",
+      'data: {"sources": [{"kind": "wiki_page", "title": "Booth", "permalink": "https://w/x", "native": {"author": "Jack", "channel_name": "#general"}}]}',
+      "",
+      "event: metadata",
+      'data: {"route": "qa_agent"}',
+      "",
+      "event: done",
+      "data: {}",
+      "",
+    ].join("\n");
+    const result = await consumeSSEStream(mockResponse(body));
+    assert.strictEqual(result.citations.length, 1);
+    assert.strictEqual(result.citations[0].type, "wiki_page");
+    assert.strictEqual(result.citations[0].author, "Jack");
+    assert.strictEqual(result.citations[0].url, "https://w/x");
+    assert.strictEqual(result.citations[0].source, "#general");
+  });
+});
+
+describe("normalizeCitations", () => {
+  it("maps legacy flat items", () => {
+    const out = normalizeCitations({
+      items: [{ type: "fact", text: "sky is blue", author: "A", permalink: "u", channel: "#c" }],
+    });
+    assert.deepStrictEqual(out, [
+      { type: "fact", text: "sky is blue", author: "A", url: "u", source: "#c" },
+    ]);
+  });
+  it("skips items without text and prefers items over sources", () => {
+    const out = normalizeCitations({
+      items: [{ type: "fact" }, { type: "fact", text: "kept" }],
+      sources: [{ kind: "wiki_page", title: "ignored" }],
+    });
+    assert.strictEqual(out.length, 1);
+    assert.strictEqual(out[0].text, "kept");
+  });
+  it("returns [] for empty payloads", () => {
+    assert.deepStrictEqual(normalizeCitations({}), []);
+  });
+});
+
+describe("detectEmptyRetrieval", () => {
+  it("flags empty when no citations and empty-pattern text", () => {
+    assert.strictEqual(detectEmptyRetrieval("I could not find any indexed memories", []), true);
+    assert.strictEqual(detectEmptyRetrieval("This channel hasn't been synced yet", []), true);
+  });
+  it("does not flag a real answer", () => {
+    assert.strictEqual(detectEmptyRetrieval("The booth is H25.", []), false);
+  });
+  it("never flags empty when citations exist", () => {
+    assert.strictEqual(
+      detectEmptyRetrieval("no indexed memories", [{ type: "fact", text: "x" }]),
+      false,
+    );
   });
 });
 
