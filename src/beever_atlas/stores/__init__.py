@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import TYPE_CHECKING
 
 from beever_atlas.stores.mongodb_store import MongoDBStore
 from beever_atlas.stores.weaviate_store import WeaviateStore
@@ -29,8 +30,12 @@ from beever_atlas.stores.platform_store import PlatformStore
 from beever_atlas.stores.chat_history_store import ChatHistoryStore
 from beever_atlas.stores.qa_history_store import QAHistoryStore
 from beever_atlas.stores.file_store import FileStore
+from beever_atlas.stores.media_blob_store import MediaBlobStore
 from beever_atlas.services.share_store import ShareStore
 from beever_atlas.infra.config import Settings
+
+if TYPE_CHECKING:  # pragma: no cover
+    from beever_atlas.stores.blob_backend import BlobBackend
 
 
 class StoreClients:
@@ -46,6 +51,7 @@ class StoreClients:
         chat_history: ChatHistoryStore,
         qa_history: QAHistoryStore,
         file_store: FileStore,
+        media_blob_store: MediaBlobStore,
         share_store: ShareStore,
     ):
         self.mongodb = mongodb
@@ -56,6 +62,7 @@ class StoreClients:
         self.chat_history = chat_history
         self.qa_history = qa_history
         self.file_store = file_store
+        self.media_blob_store = media_blob_store
         self.share_store = share_store
 
     @classmethod
@@ -89,6 +96,26 @@ class StoreClients:
         entity_registry = EntityRegistry(graph)
         # Reuse the same MongoDB connection as MongoDBStore
         platform = PlatformStore(mongodb.db["platform_connections"])
+        # Durable channel-media blob store. The refs / dedup / url_key metadata
+        # ALWAYS lives in Mongo (reusing the MongoDBStore Motor client, like
+        # PlatformStore); only the raw bytes move to the selected backend.
+        # Default 'gridfs' keeps the zero-infra OSS path; 'minio' points bytes
+        # at an S3-compatible store (MinIO locally, real AWS S3 for EE).
+        if settings.channel_media_backend == "minio":
+            from beever_atlas.stores.minio_backend import MinioBackend
+
+            blob_backend: BlobBackend | None = MinioBackend(
+                endpoint_url=settings.channel_media_minio_endpoint or None,
+                access_key=settings.channel_media_minio_access_key,
+                secret_key=settings.channel_media_minio_secret_key,
+                bucket=settings.channel_media_minio_bucket,
+                secure=settings.channel_media_minio_secure,
+                region=settings.channel_media_minio_region,
+            )
+        else:
+            # GridFSBackend is the default inside MediaBlobStore.
+            blob_backend = None
+        media_blob_store = MediaBlobStore(mongodb, backend=blob_backend)
 
         # The 4 stores below currently each open their own connection pool —
         # the goal of issue #31 is to eliminate per-request store construction
@@ -110,6 +137,7 @@ class StoreClients:
             chat_history=chat_history,
             qa_history=qa_history,
             file_store=file_store,
+            media_blob_store=media_blob_store,
             share_store=share_store,
         )
 
@@ -121,6 +149,9 @@ class StoreClients:
         await self.chat_history.startup()
         await self.qa_history.startup()
         await self.file_store.startup()
+        # MediaBlobStore reuses the MongoDBStore client, so it must bind its
+        # bucket + indexes after mongodb.startup() has pinged the connection.
+        await self.media_blob_store.startup()
         await self.share_store.startup()
 
     async def shutdown(self) -> None:
@@ -129,6 +160,11 @@ class StoreClients:
         # ShareStore, FileStore, ChatHistoryStore use sync close(); QAHistoryStore
         # has async shutdown().
         self.share_store.close()
+        # MediaBlobStore: close the byte backend BEFORE mongodb.shutdown().
+        # The GridFS backend borrows the shared Motor client so its close() is
+        # a no-op; the MinIO backend owns its own aiohttp pool and must tear it
+        # down here. Additive + safe either way.
+        await self.media_blob_store.aclose()
         self.file_store.close()
         await self.qa_history.shutdown()
         self.chat_history.close()
