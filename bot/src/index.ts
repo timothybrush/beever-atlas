@@ -5,8 +5,11 @@ import { createServer, IncomingMessage, ServerResponse } from "node:http";
 // Load .env from project root (one level up from bot/)
 config({ path: resolve(import.meta.dirname, "../../.env") });
 import { Chat } from "chat";
-import { formatBlockKit } from "./formatter.js";
-import { consumeSSEStream } from "./sse-client.js";
+import { renderResponse } from "./renderer.js";
+import { fetchSSEWithRetry } from "./sse-client.js";
+import { extractChannelId, extractPlatform } from "./thread-id.js";
+import { decideSubscribedAction } from "./trigger.js";
+import type { AskResult } from "./types.js";
 import { registerBridgeRoutes, recordTelegramChat, recordTeamsConversation, warmTeamsGraphToken, seedTeamsKnownTeamIds } from "./bridge.js";
 import { jsonResponse, readBody, MAX_BODY_SIZE, BodyTooLargeError, safeErrorMessage } from "./http-utils.js";
 import { ChatManager } from "./chat-manager.js";
@@ -20,6 +23,17 @@ const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const PORT = parseInt(process.env.BOT_PORT || "3001", 10);
 
+// Reply-feature tuning (all env-overridable for safe rollback):
+//  - ASK_TIMEOUT_MS bounds a single /ask call (retries share the budget).
+//  - HUMAN_QUIET_THRESHOLD: at/above this many humans in a thread, the bot
+//    withdraws from non-mention follow-ups (anti-spam). Default 2 = it stays
+//    chatty only while effectively 1:1 with a single human.
+//  - TRIGGER_REDESIGN: master switch for the new subscribed-thread gating;
+//    set BOT_TRIGGER_REDESIGN=off to revert to legacy "answer everything".
+const ASK_TIMEOUT_MS = parseInt(process.env.BOT_ASK_TIMEOUT_MS || "45000", 10);
+const HUMAN_QUIET_THRESHOLD = parseInt(process.env.BOT_HUMAN_QUIET_THRESHOLD || "2", 10);
+const TRIGGER_REDESIGN = (process.env.BOT_TRIGGER_REDESIGN || "on").toLowerCase() !== "off";
+
 // Issue #53 — validateEnv lives in ./validate-env.ts; it's WARN-only and
 // never gates startup (platform-specific creds are loaded from the backend
 // database at runtime). See that module for the full check list.
@@ -27,79 +41,117 @@ const PORT = parseInt(process.env.BOT_PORT || "3001", 10);
 // ── Handler registration ─────────────────────────────────────────────────────
 
 function registerHandlers(bot: Chat): void {
-  // Handler: user @mentions the bot
+  // Handler: user @mentions the bot in a not-yet-subscribed thread.
   bot.onNewMention(async (thread, message) => {
     console.log(`[@mention] ${message.text} (from ${thread.id})`);
+    // Never answer our own message or another bot — the latter prevents
+    // bot-to-bot @mention loops (e.g. a workflow bot pinging Beever).
+    if (message.author?.isMe === true || message.author?.isBot === true) return;
     await thread.subscribe();
 
-    const channelId = extractChannelId(thread.id);
     const question = stripMention(message.text || "");
-
     if (!question.trim()) {
       await thread.post("Please ask me a question! For example: @beever what is our tech stack?");
       return;
     }
 
-    try {
-      const result = await askBackend(channelId, question);
-      const blocks = formatBlockKit(result.answer, result.citations, result.route);
-      await thread.post(blocks);
-    } catch (err) {
-      console.error("Error processing mention:", safeErrorMessage(err));
-      // A failed reply must not throw out of the handler: that would make the
-      // webhook return 5xx and skip conversation recording (serviceUrl), which
-      // breaks later message fetches even though the activity was valid.
-      try {
-        await thread.post("Sorry, I encountered an error processing your question. Please try again.");
-      } catch (postErr) {
-        console.error("Failed to deliver error reply:", safeErrorMessage(postErr));
-      }
-    }
+    await answerInThread(thread, question, "mention");
   });
 
-  // Handler: follow-up messages in subscribed threads
+  // Handler: follow-up messages in subscribed threads. The SDK routes EVERY
+  // message here (including the bot's own replies and non-mention chatter), so
+  // we gate before answering — see trigger.ts for the rules.
   bot.onSubscribedMessage(async (thread, message) => {
     console.log(`[subscribed] ${message.text} (in ${thread.id})`);
 
-    const channelId = extractChannelId(thread.id);
-    const question = message.text || "";
+    // Always skip self/other-bots, even when the redesign flag is off — this is
+    // the minimum guard that prevents the reply-storm, so the legacy fallback
+    // path stays safe to roll back to.
+    if (message.author?.isMe === true || message.author?.isBot === true) return;
 
+    const question = stripMention(message.text || "");
     if (!question.trim()) return;
 
-    try {
-      const result = await askBackend(channelId, question);
-      const blocks = formatBlockKit(result.answer, result.citations, result.route);
-      await thread.post(blocks);
-    } catch (err) {
-      console.error("Error processing follow-up:", safeErrorMessage(err));
-      try {
-        await thread.post("Sorry, I encountered an error. Please try again.");
-      } catch (postErr) {
-        console.error("Failed to deliver error reply:", safeErrorMessage(postErr));
+    if (TRIGGER_REDESIGN) {
+      const action = await decideSubscribedThreadAction(thread, message);
+      if (action === "skip") return;
+      if (action === "unsubscribe") {
+        // Thread became a multi-human conversation — withdraw and stay quiet.
+        try {
+          await thread.unsubscribe();
+        } catch (err) {
+          console.error("Failed to unsubscribe from busy thread:", safeErrorMessage(err));
+        }
+        return;
       }
     }
+
+    await answerInThread(thread, question, "follow-up");
   });
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+/**
+ * Decide what to do with a subscribed-thread message. Only pays the
+ * `getParticipants()` cost when the participant count can actually change the
+ * outcome (i.e. not self/bot and not an explicit mention). A lookup failure
+ * errs toward answering, never toward going silent.
+ */
+async function decideSubscribedThreadAction(
+  thread: { getParticipants(): Promise<Array<{ isMe: boolean; isBot?: boolean | "unknown" }>> },
+  message: { isMention?: boolean; author?: { isMe?: boolean; isBot?: boolean | "unknown" } },
+): Promise<"answer" | "skip" | "unsubscribe"> {
+  const isMe = message.author?.isMe === true;
+  const isBot = message.author?.isBot;
+  const isMention = message.isMention === true;
 
-function extractChannelId(threadId: string): string {
-  // Chat SDK thread IDs follow pattern: "slack:CHANNEL_ID:THREAD_TS"
-  const parts = threadId.split(":");
-  return parts.length >= 2 ? parts[1] : threadId;
+  if (isMe || isBot === true || isMention) {
+    return decideSubscribedAction({ isMe, isBot, isMention, quietThreshold: HUMAN_QUIET_THRESHOLD });
+  }
+
+  let humanCount: number | undefined;
+  try {
+    const participants = await thread.getParticipants();
+    // Count only humans — exclude self and other bots so a single human + a
+    // helper bot doesn't trip the multi-human "go quiet" threshold.
+    humanCount = participants.filter((p) => p.isMe !== true && p.isBot !== true).length;
+  } catch (err) {
+    console.error("getParticipants failed; defaulting to answer:", safeErrorMessage(err));
+    humanCount = undefined;
+  }
+  return decideSubscribedAction({ isMe, isBot, isMention, humanCount, quietThreshold: HUMAN_QUIET_THRESHOLD });
 }
+
+/** Ask the backend and post the rendered reply, swallowing errors into a friendly notice. */
+async function answerInThread(
+  thread: { id: string; post(message: string): Promise<unknown> },
+  question: string,
+  kind: "mention" | "follow-up",
+): Promise<void> {
+  try {
+    const result = await askBackend(extractChannelId(thread.id), question);
+    await thread.post(renderResponse(result, extractPlatform(thread.id)));
+  } catch (err) {
+    console.error(`Error processing ${kind}:`, safeErrorMessage(err));
+    // A failed reply must not throw out of the handler: that would make the
+    // webhook return 5xx and skip conversation recording (serviceUrl), which
+    // breaks later message fetches even though the activity was valid.
+    try {
+      await thread.post("Sorry, I encountered an error processing your question. Please try again.");
+    } catch (postErr) {
+      console.error("Failed to deliver error reply:", safeErrorMessage(postErr));
+    }
+  }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+// `AskResult` and the thread-id parsers now live in shared modules so pure
+// consumers (sse-client, renderer, tests) don't import the server bootstrap.
+
+export type { AskResult } from "./types.js";
 
 function stripMention(text: string): string {
   // Remove Slack @mention format: <@U12345> or <@U12345|username>
   return text.replace(/<@[A-Z0-9]+(\|[^>]+)?>/g, "").trim();
-}
-
-export interface AskResult {
-  answer: string;
-  citations: Array<{ type: string; text: string }>;
-  route: string;
-  confidence: number;
-  costUsd: number;
 }
 
 function backendApiKey(): string {
@@ -108,23 +160,22 @@ function backendApiKey(): string {
 }
 
 async function askBackend(channelId: string, question: string): Promise<AskResult> {
-  const url = `${BACKEND_URL}/api/channels/${channelId}/ask`;
+  // Encode the channel id so a value with slashes/`..` can't escape the route
+  // path and reach an unintended backend endpoint.
+  const url = `${BACKEND_URL}/api/channels/${encodeURIComponent(channelId)}/ask`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const apiKey = backendApiKey();
   if (apiKey) {
     headers["Authorization"] = `Bearer ${apiKey}`;
   }
-  const response = await fetch(url, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ question }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Backend returned ${response.status}: ${await response.text()}`);
-  }
-
-  return consumeSSEStream(response);
+  // Bound the whole call (the timeout budget is shared across retries) and let
+  // fetchSSEWithRetry absorb transient 5xx / network blips with backoff so a
+  // slow or flapping backend doesn't surface a hard error to the user.
+  return fetchSSEWithRetry(
+    url,
+    { method: "POST", headers, body: JSON.stringify({ question }) },
+    { maxAttempts: 3, signal: AbortSignal.timeout(ASK_TIMEOUT_MS) },
+  );
 }
 
 // ── Backend health check ────────────────────────────────────────────────────
