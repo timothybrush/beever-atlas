@@ -7,7 +7,7 @@
  * backoff for retryable failures at the fetch layer.
  */
 
-import type { AskResult, Citation } from "./types.js";
+import type { AskResult, Citation, Tension } from "./types.js";
 
 export interface SSEConsumeOptions {
   onDelta?: (delta: string) => void;
@@ -29,7 +29,18 @@ interface StreamState {
   lastSyncTs?: string;
   /** Backend-provided empty-retrieval signal, if the metadata event carried it. */
   backendEmpty?: boolean;
+  /** Suggested related questions from the backend `follow_ups` event. */
+  followUps: string[];
+  /** Documented tensions from the backend `related_context` event. */
+  tensions: Tension[];
 }
+
+/**
+ * Answers at/above this length are treated as substantive and never collapsed
+ * into the empty state, even if the backend flags empty retrieval — guards
+ * against hiding a real (if uncited) answer.
+ */
+const SUBSTANTIVE_ANSWER_CHARS = 600;
 
 /** Phrases the QA agent emits when retrieval found nothing (see backend prompt). */
 const EMPTY_PATTERN =
@@ -83,22 +94,61 @@ export function normalizeCitations(data: Record<string, unknown>): Citation[] {
   return out;
 }
 
+/**
+ * Normalize the `related_context` event's `tensions` into {@link Tension}[].
+ * Tolerant of backend field naming (title/topic/summary, detail/description).
+ */
+export function normalizeTensions(data: Record<string, unknown>): Tension[] {
+  const raw = Array.isArray(data.tensions) ? data.tensions : [];
+  const out: Tension[] = [];
+  for (const item of raw) {
+    const t = asRecord(item);
+    const title = asString(t.title) ?? asString(t.topic) ?? asString(t.summary);
+    if (!title) continue;
+    // Avoid "X — X": only use summary as detail when it wasn't promoted to title.
+    let detail = asString(t.detail) ?? asString(t.description);
+    if (!detail && asString(t.summary) !== title) detail = asString(t.summary);
+    out.push({ title, detail });
+    if (out.length >= 3) break;
+  }
+  return out;
+}
+
 /** True when retrieval clearly found nothing: no citations AND empty-pattern text. */
 export function detectEmptyRetrieval(answer: string, citations: Citation[]): boolean {
   if (citations.length > 0) return false;
   return EMPTY_PATTERN.test(answer);
 }
 
+/**
+ * Decide the final empty-state, combining the backend signal with the client
+ * heuristic safely. Requirements to render the empty state:
+ *  - no citations (a cited answer is never "empty"), AND
+ *  - the backend flagged empty retrieval OR the text matches the empty pattern, AND
+ *  - the answer is not substantive (so a long real answer is never hidden even
+ *    if the backend flag misfires).
+ */
+export function resolveIsEmpty(
+  answer: string,
+  citations: Citation[],
+  backendEmpty: boolean | undefined,
+): boolean {
+  if (citations.length > 0) return false;
+  if (answer.trim().length >= SUBSTANTIVE_ANSWER_CHARS) return false;
+  return backendEmpty === true || EMPTY_PATTERN.test(answer);
+}
+
 function finalizeResult(state: StreamState): AskResult {
-  const isEmpty = state.backendEmpty ?? detectEmptyRetrieval(state.answer, state.citations);
   return {
     answer: state.answer,
     citations: state.citations,
     route: state.route,
     confidence: state.confidence,
     costUsd: state.costUsd,
-    isEmpty,
+    isEmpty: resolveIsEmpty(state.answer, state.citations, state.backendEmpty),
     lastSyncTs: state.lastSyncTs,
+    followUps: state.followUps,
+    tensions: state.tensions,
   };
 }
 
@@ -147,6 +197,18 @@ function applyEvent(
         state.lastSyncTs = event.data.last_sync_ts;
       }
       break;
+    case "follow_ups": {
+      const suggestions = event.data.suggestions;
+      if (Array.isArray(suggestions)) {
+        state.followUps = suggestions
+          .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+          .slice(0, 3);
+      }
+      break;
+    }
+    case "related_context":
+      state.tensions = normalizeTensions(event.data);
+      break;
     case "error":
       throw new Error((event.data.message as string) || "Unknown backend error");
   }
@@ -162,6 +224,8 @@ export async function consumeSSEStream(
     route: "echo",
     confidence: 0,
     costUsd: 0,
+    followUps: [],
+    tensions: [],
   };
 
   if (!response.body) {

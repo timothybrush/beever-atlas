@@ -23,6 +23,12 @@ export interface Citation {
   source?: string;
 }
 
+/** A documented tension/contradiction relevant to the answer (proactive nudge). */
+export interface Tension {
+  title: string;
+  detail?: string;
+}
+
 /** Assembled result of consuming one `/ask` SSE stream. */
 export interface AskResult {
   answer: string;
@@ -39,4 +45,8 @@ export interface AskResult {
   isEmpty: boolean;
   /** ISO-8601 timestamp of the channel's last sync, when the backend supplies it. */
   lastSyncTs?: string;
+  /** Suggested related questions surfaced as chips at the reply tail. */
+  followUps?: string[];
+  /** Documented tensions relevant to the answer (from the related_context event). */
+  tensions?: Tension[];
 }

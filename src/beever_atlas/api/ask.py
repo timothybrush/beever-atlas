@@ -277,6 +277,96 @@ async def _load_chat_history_parts(session_id: str) -> list[genai_types.Content]
         return []
 
 
+def _compute_confidence(registry) -> float:
+    """Honest answer confidence in [0.1, 0.95] from retrieval signals.
+
+    No extra model call — blends signals already collected on the citation
+    registry:
+      - coverage (40%): how much of the answer is actually cited
+        (referenced markers / registered sources);
+      - breadth (30%): how many distinct sources were found (4+ = full);
+      - quality (30%): average retrieval score of those sources.
+    Returns a low ``0.15`` when nothing was retrieved or the registry is off, so
+    the signal is honest rather than the old fabricated ``0.85`` constant.
+    """
+    if registry is None:
+        return 0.15
+    registered = registry.registered_count
+    if registered == 0:
+        return 0.15
+    coverage = min(1.0, registry.referenced_count / registered)
+    breadth = min(1.0, registered / 4.0)
+    scores = registry.retrieval_scores()
+    quality = sum(scores) / len(scores) if scores else 0.5
+    quality = max(0.0, min(1.0, quality))
+    blended = 0.4 * coverage + 0.3 * breadth + 0.3 * quality
+    return round(max(0.1, min(0.95, blended)), 2)
+
+
+async def _related_context_payload(
+    channel_id: str, principal_id: str, answer_text: str
+) -> dict | None:
+    """Best-effort inline proactive context (tensions relevant to the answer).
+
+    Computed AFTER the answer has finished streaming, so it never delays the
+    visible reply, and time-bounded to 0.8s so a slow wiki scan can't stall the
+    trailing events. Returns ``None`` (emit nothing) when there's nothing
+    relevant or on any error.
+    """
+    try:
+        from beever_atlas.capabilities.proactive import get_relevant_tensions
+
+        tensions = await asyncio.wait_for(
+            get_relevant_tensions(channel_id, principal_id, answer_text, limit=2),
+            timeout=0.8,
+        )
+    except Exception:  # pragma: no cover - defensive; proactive context is best-effort
+        return None
+    return {"tensions": tensions} if tensions else None
+
+
+async def _build_metadata_event(
+    *,
+    channel_id: str,
+    session_id: str,
+    mode: str,
+    registry,
+) -> dict:
+    """Assemble the SSE ``metadata`` payload.
+
+    Centralized so the non-deep and deep emit paths cannot drift. Adds two
+    additive, backward-compatible signals consumed by the chat bot:
+
+    - ``is_empty_retrieval``: ``True`` when retrieval registered no sources, so
+      the client can render an honest "nothing indexed" state instead of
+      guessing from the answer text. Falls back to ``False`` when the citation
+      registry is off (legacy path), leaving the client heuristic in charge.
+    - ``last_sync_ts``: the channel's last sync time (ISO-8601) for a freshness
+      hint. A store hiccup degrades it to ``None`` rather than breaking the
+      stream — freshness is best-effort.
+    """
+    from beever_atlas.stores import get_stores
+
+    last_sync_ts: str | None = None
+    try:
+        _state = await get_stores().mongodb.get_channel_sync_state(channel_id)
+        if _state is not None:
+            last_sync_ts = _state.last_sync_ts
+    except Exception:  # pragma: no cover - defensive; freshness is best-effort
+        last_sync_ts = None
+
+    return {
+        "route": "qa_agent",
+        "confidence": _compute_confidence(registry),
+        "cost_usd": 0.0,
+        "channel_id": channel_id,
+        "session_id": session_id,
+        "mode": mode,
+        "is_empty_retrieval": registry is not None and registry.registered_count == 0,
+        "last_sync_ts": last_sync_ts,
+    }
+
+
 async def _run_agent_stream(
     question: str,
     channel_id: str,
@@ -783,15 +873,16 @@ async def _run_agent_stream(
 
                 yield _sse_event(
                     "metadata",
-                    {
-                        "route": "qa_agent",
-                        "confidence": 0.85,
-                        "cost_usd": 0.0,
-                        "channel_id": channel_id,
-                        "session_id": session_id,
-                        "mode": mode,
-                    },
+                    await _build_metadata_event(
+                        channel_id=channel_id,
+                        session_id=session_id,
+                        mode=mode,
+                        registry=_registry,
+                    ),
                 )
+                _rc = await _related_context_payload(channel_id, user_id, accumulated_text)
+                if _rc:
+                    yield _sse_event("related_context", _rc)
                 await _persist_qa_history(
                     question=question,
                     answer=accumulated_text,
@@ -914,15 +1005,16 @@ async def _run_agent_stream(
 
                 yield _sse_event(
                     "metadata",
-                    {
-                        "route": "qa_agent",
-                        "confidence": 0.85,
-                        "cost_usd": 0.0,
-                        "channel_id": channel_id,
-                        "session_id": session_id,
-                        "mode": mode,
-                    },
+                    await _build_metadata_event(
+                        channel_id=channel_id,
+                        session_id=session_id,
+                        mode=mode,
+                        registry=_registry,
+                    ),
                 )
+                _rc = await _related_context_payload(channel_id, user_id, accumulated_text)
+                if _rc:
+                    yield _sse_event("related_context", _rc)
                 await _persist_qa_history(
                     question=question,
                     answer=accumulated_text,

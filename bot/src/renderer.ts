@@ -19,7 +19,7 @@
  * are a deliberate follow-up (they need the SDK `onAction` webhook wired up).
  */
 
-import type { AskResult, Citation } from "./types.js";
+import type { AskResult, Citation, Tension } from "./types.js";
 
 /**
  * Per-platform max message length (chars), set conservatively below each
@@ -94,8 +94,11 @@ function cleanUrl(u: string): string {
   return t.replace(/[\s<>]+/g, "");
 }
 
-function renderCitationLine(c: Citation, i: number): string {
-  let line = `${iconFor(c.type)} [${i + 1}] ${cleanField(c.text)}`.trim();
+/** Citation kinds that read as "related context" (graph) rather than direct sources. */
+const RELATED_KINDS = new Set(["decision_record", "graph_relationship"]);
+
+function renderCitationLine(c: Citation, num: number): string {
+  let line = `${iconFor(c.type)} [${num}] ${cleanField(c.text)}`.trim();
   const meta: string[] = [];
   if (c.author) meta.push(cleanField(c.author, 80));
   if (c.source) meta.push(cleanField(c.source, 80));
@@ -106,13 +109,64 @@ function renderCitationLine(c: Citation, i: number): string {
   return line;
 }
 
-export function renderCitations(citations: Citation[]): string {
-  if (citations.length === 0) return "";
-  const shown = citations.slice(0, MAX_CITATIONS);
-  const lines = shown.map(renderCitationLine).join("\n");
-  const overflow = citations.length - shown.length;
+/**
+ * Render one citation block under a heading. Entries carry their ORIGINAL
+ * 1-based index so inline `[n]` markers in the answer stay valid even though
+ * sources and related context are shown in separate blocks.
+ */
+function renderCitationBlock(heading: string, entries: Array<{ c: Citation; num: number }>): string {
+  if (entries.length === 0) return "";
+  const shown = entries.slice(0, MAX_CITATIONS);
+  const lines = shown.map(({ c, num }) => renderCitationLine(c, num)).join("\n");
+  const overflow = entries.length - shown.length;
   const more = overflow > 0 ? `\n_+${overflow} more_` : "";
-  return `\n\n📎 *Sources*\n${lines}${more}`;
+  return `\n\n${heading}\n${lines}${more}`;
+}
+
+/** Backward-compatible: render all citations as a single Sources block. */
+export function renderCitations(citations: Citation[]): string {
+  return renderCitationBlock("📎 *Sources*", citations.map((c, i) => ({ c, num: i + 1 })));
+}
+
+/** Group citations into direct sources vs graph "related context", keeping indices. */
+export function partitionCitations(citations: Citation[]): {
+  sources: Array<{ c: Citation; num: number }>;
+  related: Array<{ c: Citation; num: number }>;
+} {
+  const sources: Array<{ c: Citation; num: number }> = [];
+  const related: Array<{ c: Citation; num: number }> = [];
+  citations.forEach((c, i) => {
+    (RELATED_KINDS.has(c.type) ? related : sources).push({ c, num: i + 1 });
+  });
+  return { sources, related };
+}
+
+const LOW_CONFIDENCE = 0.35;
+
+/**
+ * A subtle low-confidence warning — shown ONLY when the backend reports a real
+ * score at/below the threshold. `0` means "no signal" (older backend) → silent;
+ * a high score → silent. Never fabricates a number.
+ */
+export function renderConfidence(confidence: number, isEmpty: boolean): string {
+  if (isEmpty) return "";
+  if (typeof confidence !== "number" || confidence <= 0 || confidence > LOW_CONFIDENCE) return "";
+  return `\n⚠️ _low confidence — please verify against the sources_`;
+}
+
+/** Proactive "heads up" when the answer touches a documented tension (max 2). */
+export function renderTensions(tensions?: Tension[]): string {
+  if (!tensions || tensions.length === 0) return "";
+  const items = tensions
+    .slice(0, 2)
+    .map((t) => {
+      const title = cleanField(t.title, 140);
+      const detail = t.detail ? cleanField(t.detail, 160) : "";
+      return detail ? `• ${title} — ${detail}` : `• ${title}`;
+    })
+    .filter((l) => l.length > 2);
+  if (items.length === 0) return "";
+  return `\n\n⚠️ *Heads up — possible tension*\n${items.join("\n")}`;
 }
 
 /** Human-friendly "Xm/Xh/Xd ago" from an ISO timestamp; null if unparseable. */
@@ -142,6 +196,21 @@ function renderRoute(route: string): string {
 }
 
 /**
+ * Suggested related questions as a short "You might also ask" list (max 3).
+ * Rendered before the route footer so that, under truncation, the chips are the
+ * sacrificial tail and the answer is always preserved.
+ */
+export function renderFollowUps(followUps?: string[]): string {
+  if (!followUps || followUps.length === 0) return "";
+  const items = followUps
+    .map((q) => cleanField(q, 120))
+    .filter((q) => q.length > 0)
+    .slice(0, 3);
+  if (items.length === 0) return "";
+  return `\n\n_You might also ask:_\n${items.map((q) => `• ${q}`).join("\n")}`;
+}
+
+/**
  * Honest, actionable empty state — replaces the old wall of
  * "I could not find any indexed memories…" text. Short, and points to the
  * next step instead of dead-ending.
@@ -163,10 +232,17 @@ export function renderResponse(result: AskResult, platform: string): string {
   const plat = (platform || "unknown").toLowerCase();
   if (result.isEmpty) return renderEmptyState(result, plat);
 
+  const { sources, related } = partitionCitations(result.citations || []);
   const body =
     (result.answer || "").trimEnd() +
-    renderCitations(result.citations || []) +
+    // A low-confidence warning sits right under the answer so truncation can
+    // never drop this trust signal.
+    renderConfidence(result.confidence, result.isEmpty) +
+    renderCitationBlock("📎 *Sources*", sources) +
+    renderCitationBlock("🧠 *Related*", related) +
+    renderTensions(result.tensions) +
     renderFreshness(result.lastSyncTs) +
+    renderFollowUps(result.followUps) +
     renderRoute(result.route || "qa_agent");
 
   return enforceCap(body, capFor(plat));
