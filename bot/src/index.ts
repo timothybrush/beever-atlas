@@ -8,8 +8,12 @@ config({ path: resolve(import.meta.dirname, "../../.env") });
 import { Chat } from "chat";
 import { renderResponse } from "./renderer.js";
 import { fetchSSEWithRetry } from "./sse-client.js";
-import { extractChannelId, extractPlatform, extractThreadId } from "./thread-id.js";
-import { decideSubscribedThreadActionWithLookup } from "./trigger.js";
+import { extractChannelId, extractPlatform, extractThreadId, hasThreadRoot } from "./thread-id.js";
+import {
+  decideShouldRespond,
+  decideSubscribedThreadActionWithLookup,
+  isBroadcast,
+} from "./trigger.js";
 import { stripMention } from "./mentions.js";
 import { ParticipantCache } from "./participant-cache.js";
 import { logReplySent, type ReplySurface } from "./reply-metrics.js";
@@ -72,15 +76,32 @@ function registerHandlers(bot: Chat): void {
 
     const platform = extractPlatform(thread.id);
     const question = stripMention(message.text || "", platform);
-    if (!question.trim()) {
+    // Addressing & intent gate: only speak when actually asked something. Bare
+    // mention → nudge; an announcement (@channel/@here/@everyone) or a pleasantry
+    // that happens to tag the bot → stay quiet.
+    const decision = decideShouldRespond({
+      text: question,
+      broadcast: isBroadcast(message.text || ""),
+      isMention: true,
+      surface: "mention",
+    });
+    if (decision === "prompt") {
       await thread.post("Please ask me a question! For example: @beever what is our tech stack?");
       return;
     }
+    if (decision === "skip") return;
 
     if (!(await passesRateLimit(thread, message))) return;
-    // Loose top-level @mention (not inside a thread) → key the session on
-    // (user, channel) within an idle window, not on the thread id.
-    await answerInThread(thread, question, "mention", message.author, false);
+    // P2 — key on the THREAD (isThreaded=true), same as onSubscribedMessage.
+    // On every supported platform `thread.id` is the STABLE thread ROOT: Slack
+    // encodes it as `slack:<channel>:<threadTs>` where threadTs is
+    // `event.thread_ts || event.ts`, so a root @mention (no thread_ts) and all
+    // its replies (thread_ts = root ts) share one id. Keying both handlers on
+    // the thread is what makes the root @mention and its follow-ups resume ONE
+    // backend session — the old `false` here put the root on a separate
+    // idle-window key, so memory never carried into the thread. Fall back to the
+    // loose idle-window key only for a degenerate id with no thread segment.
+    await answerInThread(thread, question, "mention", message.author, hasThreadRoot(thread.id));
   });
 
   // Handler: follow-up messages in subscribed threads. The SDK routes EVERY
@@ -113,6 +134,18 @@ function registerHandlers(bot: Chat): void {
       }
     }
 
+    // Addressing & intent gate (runs AFTER the stay-subscribed decision, so a
+    // busy thread still triggers unsubscribe): only answer clear questions/
+    // requests, or statements that directly @mention the bot. Broadcasts/
+    // announcements, pleasantries, and passive non-mention chatter → stay quiet.
+    const decision = decideShouldRespond({
+      text: question,
+      broadcast: isBroadcast(message.text || ""),
+      isMention: message.isMention === true,
+      surface: "follow-up",
+    });
+    if (decision !== "respond") return;
+
     if (!(await passesRateLimit(thread, message))) return;
     await answerInThread(thread, question, "follow-up", message.author);
   });
@@ -126,10 +159,19 @@ function registerHandlers(bot: Chat): void {
 
       const platform = extractPlatform(thread.id);
       const question = stripMention(message.text || "", platform);
-      if (!question.trim()) {
+      // DM is a direct 1:1 surface: answer questions and statements, nudge on an
+      // empty message, but still skip a bare pleasantry ("thanks").
+      const decision = decideShouldRespond({
+        text: question,
+        broadcast: false,
+        isMention: true,
+        surface: "dm",
+      });
+      if (decision === "prompt") {
         await thread.post("Ask me anything about this workspace's knowledge.");
         return;
       }
+      if (decision === "skip") return;
       if (!(await passesRateLimit(thread, message))) return;
       await answerInThread(thread, question, "dm", message.author);
     });
@@ -336,7 +378,9 @@ async function askBackend(
   return fetchSSEWithRetry(
     url,
     { method: "POST", headers, body: JSON.stringify({ question, session_id: sessionId, user_id: userId }) },
-    { maxAttempts: 3, signal: AbortSignal.timeout(ASK_TIMEOUT_MS) },
+    // Pass the channel id so the SSE client can scrub a leaked raw channel id
+    // from the answer and use it to collapse an `(id)`-variant near-duplicate.
+    { maxAttempts: 3, signal: AbortSignal.timeout(ASK_TIMEOUT_MS), channelId },
   );
 }
 
