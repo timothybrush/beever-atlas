@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { X, ArrowLeft, ArrowRight, CheckCircle2, Loader2, AlertCircle, ExternalLink, Zap } from "lucide-react";
+import { X, ArrowLeft, ArrowRight, CheckCircle2, Loader2, AlertCircle, ExternalLink, Zap, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 import { ChannelSelector } from "./ChannelSelector";
 import { useCreateConnection } from "@/hooks/useConnections";
 import { useConnectionChannels, useUpdateChannels } from "@/hooks/useConnections";
@@ -18,9 +19,9 @@ type Step = 1 | 2 | 3 | 4 | 5;
 
 const SLACK_INSTRUCTIONS = [
   { text: "Go to", link: "https://api.slack.com/apps", linkText: "api.slack.com/apps" },
-  { text: "Click Create New App → From scratch" },
+  { text: "Create New App → From scratch, then open your app." },
   {
-    text: "Under OAuth & Permissions → Scopes → Bot Token Scopes, turn on all required scopes:",
+    text: "OAuth & Permissions → Bot Token Scopes — add:",
     details: [
       "channels:history",
       "channels:read",
@@ -30,9 +31,19 @@ const SLACK_INSTRUCTIONS = [
       "users:read",
     ],
   },
-  { text: "Click Install to Workspace and authorize" },
-  { text: "Copy the Bot User OAuth Token (starts with xoxb-)" },
-  { text: "Under Basic Information, copy the Signing Secret" },
+  { text: "Install to Workspace and authorize." },
+  { text: "OAuth & Permissions → copy the Bot User OAuth Token (starts with xoxb-)." },
+  {
+    text: "Pick how Slack delivers events — Socket Mode is recommended (no public URL, survives restarts):",
+    details: [
+      "Socket Mode → Settings → Socket Mode (enable) → Basic Information → App-Level Tokens → generate with scope connections:write → copy the xapp- token",
+      "Events API → Basic Information → copy the Signing Secret, then set the Request URL shown above",
+    ],
+  },
+  {
+    text: "Event Subscriptions → Subscribe to bot events — add (both modes):",
+    details: ["app_mention", "message.channels", "message.groups"],
+  },
 ];
 
 const DISCORD_INSTRUCTIONS = [
@@ -123,7 +134,22 @@ function validateAadGuid(label: string) {
 const CREDENTIAL_FIELDS: Record<Platform, CredentialField[]> = {
   slack: [
     { key: "bot_token", label: "Bot Token", placeholder: "xoxb-...", type: "password" },
-    { key: "signing_secret", label: "Signing Secret", placeholder: "Your app's signing secret", type: "password" },
+    {
+      key: "app_token",
+      label: "App-Level Token (Socket Mode — recommended)",
+      placeholder: "xapp-...",
+      type: "password",
+      optional: true,
+      hint: "Recommended for local/self-hosted: Socket Mode uses an outbound connection, so no public URL or tunnel is needed and it keeps working after restarts. Generate under Basic Information → App-Level Tokens with the connections:write scope.",
+    },
+    {
+      key: "signing_secret",
+      label: "Signing Secret (Events API)",
+      placeholder: "Your app's signing secret",
+      type: "password",
+      optional: true,
+      hint: "Only needed if you are NOT using Socket Mode. Events API requires a public Request URL (a tunnel in local dev).",
+    },
   ],
   discord: [
     { key: "bot_token", label: "Bot Token", placeholder: "Your bot token", type: "password" },
@@ -226,7 +252,14 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
     }
   }
 
-  const credentialsFilled = fields.every((f) => f.optional || (credentials[f.key] ?? "").trim().length > 0);
+  const credentialsFilled =
+    fields.every((f) => f.optional || (credentials[f.key] ?? "").trim().length > 0) &&
+    // Slack accepts EITHER an app-level token (Socket Mode) OR a signing
+    // secret (Events API) — both are marked optional individually, so require
+    // at least one here.
+    (platform !== "slack" ||
+      (credentials.app_token ?? "").trim().length > 0 ||
+      (credentials.signing_secret ?? "").trim().length > 0);
   // Disable Validate when any FILLED field fails its own validator. Empty
   // fields are handled by `credentialsFilled`; we don't double-report.
   const credentialsValid = fields.every((f) => {
@@ -242,10 +275,12 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
         onClick={onClose}
       />
 
-      {/* Dialog */}
-      <div className="relative z-10 w-full max-w-3xl bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
+      {/* Dialog — flex column capped at the viewport so a tall step (e.g. the
+          Slack instructions) scrolls in the middle instead of pushing the
+          footer off-screen / overlapping it. */}
+      <div className="relative z-10 flex flex-col w-full max-w-3xl max-h-[90vh] bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-border space-y-3">
+        <div className="shrink-0 px-6 py-4 border-b border-border space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold text-foreground">
               Connect {{ slack: "Slack", discord: "Discord", teams: "Microsoft Teams", telegram: "Telegram", mattermost: "Mattermost" }[platform]}
@@ -261,8 +296,9 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
           <StepIndicator current={step} />
         </div>
 
-        {/* Content */}
-        <div className="px-6 py-5">
+        {/* Content — scrolls independently; min-h-0 lets it shrink within the
+            flex column so overflow-y actually engages. */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-5">
           {step === 1 && (
             <StepInstructions
               platform={platform}
@@ -301,7 +337,7 @@ export function ConnectionWizard({ platform, onClose, onComplete }: ConnectionWi
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-4 border-t border-border bg-muted/30">
+        <div className="shrink-0 flex items-center justify-between px-6 py-4 border-t border-border bg-muted/30">
           <div>
             {step === 2 && (
               <button
@@ -445,6 +481,81 @@ function StepIndicator({ current }: { current: Step }) {
   );
 }
 
+interface ConnectivityConfig {
+  public_bot_url: string;
+  configured: boolean;
+  webhooks: { slack: string; teams: string };
+}
+
+/** Shows the live public webhook URL the user must paste into Slack's Request
+ *  URL / Teams' messaging endpoint, fetched from /api/config/connectivity.
+ *  When PUBLIC_BOT_URL is unset it explains how to configure connectivity
+ *  instead of leaving the user guessing. Only relevant for inbound-webhook
+ *  platforms (Slack Events API, Teams); harmless for Slack Socket Mode. */
+function WebhookUrlCallout({ platform }: { platform: "slack" | "teams" }) {
+  const [cfg, setCfg] = useState<ConnectivityConfig | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .get<ConnectivityConfig>("/api/config/connectivity")
+      .then((c) => alive && setCfg(c))
+      .catch(() => alive && setCfg(null));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const url = cfg?.webhooks?.[platform] ?? "";
+  const label =
+    platform === "slack" ? "Slack Event Subscriptions → Request URL" : "Teams bot Messaging endpoint";
+
+  async function copy() {
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard may be blocked; the URL is still shown for manual copy */
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-muted/40 px-3 py-2.5 space-y-1.5">
+      <p className="text-xs font-medium text-foreground">
+        {platform === "slack" ? "Public URL (Events API only — skip for Socket Mode)" : "Public messaging endpoint"}
+      </p>
+      {cfg?.configured && url ? (
+        <>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 text-xs font-mono text-foreground/90 bg-background border border-border rounded px-2 py-1 truncate">
+              {url}
+            </code>
+            <button
+              type="button"
+              onClick={copy}
+              className="shrink-0 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+            >
+              {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <p className="text-[11px] text-muted-foreground">Paste this as your {label}.</p>
+        </>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          No public URL is configured. Set <code className="font-mono">PUBLIC_BOT_URL</code> (a tunnel like
+          {" "}<code className="font-mono">ngrok http 3001</code> in local dev, or your public domain in production) so
+          this shows the exact {label} to paste.
+          {platform === "slack" && " Or use Socket Mode (App-Level Token) to skip public URLs entirely."}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function StepInstructions({
   platform,
   instructions,
@@ -464,6 +575,7 @@ function StepInstructions({
         </h3>
         <p className="text-xs text-muted-foreground">Follow these steps before entering your credentials.</p>
       </div>
+      {(platform === "slack" || platform === "teams") && <WebhookUrlCallout platform={platform} />}
       <div className="space-y-1">
         {instructions.map((instruction, i) => (
           <div key={i} className="flex gap-3 items-start px-3 py-2.5 rounded-lg hover:bg-muted/40 transition-colors">
