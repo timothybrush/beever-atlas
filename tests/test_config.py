@@ -34,6 +34,8 @@ class TestSettings:
         assert hasattr(settings, "google_api_key")
         assert hasattr(settings, "jina_api_key")
         assert hasattr(settings, "tavily_api_key")
+        assert hasattr(settings, "olostep_api_key")
+        assert hasattr(settings, "web_search_provider")
 
     def test_public_bot_base_empty_when_unset(self, monkeypatch):
         from beever_atlas.infra.config import Settings

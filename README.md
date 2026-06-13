@@ -168,6 +168,7 @@ Optional (skip unless you know you need them):
 | Key | What it enables |
 |---|---|
 | `TAVILY_API_KEY` | External web search when QA retrieval confidence is low — [tavily.com](https://tavily.com/) |
+| `OLOSTEP_API_KEY` | Olostep web search (alternative to Tavily). Set `WEB_SEARCH_PROVIDER=olostep` in your `.env` — [olostep.com/dashboard](https://www.olostep.com/dashboard) |
 | Slack / Discord / Teams bot tokens | **Configured via the web UI after setup**, not `.env` — the bot stores platform credentials encrypted in MongoDB |
 
 > **Tip:** Keep the two required keys handy before you start. Option 1 prompts for them interactively; Options 2 and 3 need them pasted into `.env`.
