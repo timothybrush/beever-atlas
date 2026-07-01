@@ -151,11 +151,12 @@ async def seed_precomputed(stores, *, force: bool = False) -> None:
             upsert=True,
         )
 
-    # Upsert message documents
+    # Upsert message documents into channel_messages (the real collection;
+    # unique key is (source_id, channel_id, message_id)).
     messages = mongo_data.get("messages", [])
     for doc in messages:
-        await db["messages"].update_one(
-            {"message_id": doc["message_id"]},
+        await db["channel_messages"].update_one(
+            {"channel_id": doc.get("channel_id", DEMO_CHANNEL_ID), "message_id": doc["message_id"]},
             {"$set": doc},
             upsert=True,
         )
@@ -193,7 +194,7 @@ async def seed_precomputed(stores, *, force: bool = False) -> None:
                 if k not in ("embedding",)
             }
             batch.add_object(
-                collection="Fact",
+                collection="MemoryFact",
                 properties=properties,
                 vector=vector,
             )
@@ -221,10 +222,19 @@ async def seed_precomputed(stores, *, force: bool = False) -> None:
         sys.exit(1)
 
     neo4j_driver = stores.graph._driver
+    executed = 0
+    skipped = 0
     async with neo4j_driver.session() as session:
         for stmt, params in blocks:
-            await session.run(stmt, **params)
-    logger.info("Neo4j: %d statements executed.", len(blocks))
+            try:
+                await session.run(stmt, **params)
+                executed += 1
+            except Exception as exc:
+                # One malformed fixture statement must not abort the whole demo
+                # seed — the facts (Weaviate) are the primary retrieval surface.
+                skipped += 1
+                logger.warning("Neo4j: skipped a fixture statement (%s): %s", type(exc).__name__, exc)
+    logger.info("Neo4j: %d statements executed (%d skipped).", executed, skipped)
 
     logger.info("Seeding complete.")
     print()
@@ -472,7 +482,7 @@ async def _export_fixtures(stores) -> None:
 
     channels = [_serialize(d) async for d in db["channels"].find({"channel_id": DEMO_CHANNEL_ID})]
     sync_states = [_serialize(d) async for d in db["channel_sync_state"].find({"channel_id": DEMO_CHANNEL_ID})]
-    messages = [_serialize(d) async for d in db["messages"].find({"channel_id": DEMO_CHANNEL_ID})]
+    messages = [_serialize(d) async for d in db["channel_messages"].find({"channel_id": DEMO_CHANNEL_ID})]
 
     mongo_data = {
         "channels": channels,
@@ -486,21 +496,29 @@ async def _export_fixtures(stores) -> None:
     # Export facts with their stored vectors from Weaviate
     weaviate_lines = []
     try:
+        from weaviate.classes.query import Filter
+
+        def _json_default(o):
+            return o.isoformat() if isinstance(o, datetime) else str(o)
+
         client = stores.weaviate._client
-        result = (
-            client.collections.get("Fact")
-            .query.fetch_objects(
-                filters=client.collections.get("Fact").query.filter.by_property("channel_id").equal(DEMO_CHANNEL_ID),
-                include_vector=True,
-                limit=10000,
-            )
+        # Real collection is "MemoryFact"; Configure.Vectorizer.none() stores the
+        # externally-supplied embedding under the "default" vector. The previous
+        # code queried "Fact" with a non-existent `.query.filter` API, so it always
+        # excepted and silently wrote an empty file.
+        result = client.collections.get("MemoryFact").query.fetch_objects(
+            filters=Filter.by_property("channel_id").equal(DEMO_CHANNEL_ID),
+            include_vector=True,
+            limit=10000,
         )
         for obj in result.objects:
             record = dict(obj.properties)
-            if obj.vector:
-                vec = obj.vector
-                record["embedding"] = list(vec) if not isinstance(vec, list) else vec
-            weaviate_lines.append(json.dumps(record))
+            vec = obj.vector
+            if isinstance(vec, dict):
+                vec = vec.get("default", [])
+            if vec:
+                record["embedding"] = list(vec)
+            weaviate_lines.append(json.dumps(record, default=_json_default))
     except Exception as exc:
         logger.warning("Could not export Weaviate facts: %s", exc)
 
@@ -519,9 +537,13 @@ async def _export_fixtures(stores) -> None:
             )
             async for record in node_result:
                 node = record["n"]
-                labels = ":".join(node.labels)
                 props = dict(node)
-                params_line = f"// params: {json.dumps(props)}"
+                # Nodes are MERGE'd by name; a node without a name can't be emitted
+                # as `{name: $name}` (raises ParameterMissing on import), so skip it.
+                if not props.get("name"):
+                    continue
+                labels = ":".join(node.labels)
+                params_line = f"// params: {json.dumps(props, default=str)}"
                 prop_assigns = ", ".join(f"n.{k} = ${k}" for k in props if k != "name")
                 stmt = f"MERGE (n:{labels} {{name: $name}}) SET {prop_assigns};" if prop_assigns else f"MERGE (n:{labels} {{name: $name}});"
                 cypher_lines.append(params_line)
@@ -534,12 +556,16 @@ async def _export_fixtures(stores) -> None:
                 channel_id=DEMO_CHANNEL_ID,
             )
             async for record in rel_result:
+                # Both endpoints are matched by name; skip a relationship whose
+                # source/target node has no name (could never match on import).
+                if not record["src"] or not record["tgt"]:
+                    continue
                 params = {
                     "src": record["src"],
                     "tgt": record["tgt"],
                     **record["props"],
                 }
-                params_line = f"// params: {json.dumps(params)}"
+                params_line = f"// params: {json.dumps(params, default=str)}"
                 stmt = f"MATCH (a {{name: $src}}), (b {{name: $tgt}}) MERGE (a)-[:{record['rel']}]->(b);"
                 cypher_lines.append(params_line)
                 cypher_lines.append(stmt)
